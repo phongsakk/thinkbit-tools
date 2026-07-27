@@ -5,7 +5,7 @@ export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
 type RouteContext = {
-  params: Promise<{ documentId: string }>
+  params: Promise<{ kind: string; documentId: string }>
 }
 
 function sanitizeDocumentId(documentId: string) {
@@ -14,13 +14,17 @@ function sanitizeDocumentId(documentId: string) {
 
 export async function GET(_request: Request, context: RouteContext) {
   try {
-    const { documentId: rawId } = await context.params
+    const { kind, documentId: rawId } = await context.params
+    if (kind !== "cosmos" && kind !== "prepare") {
+      return Response.json({ error: "kind must be cosmos or prepare" }, { status: 400 })
+    }
+
     const documentId = sanitizeDocumentId(rawId)
     if (!documentId) {
       return Response.json({ error: "documentId is required" }, { status: 400 })
     }
 
-    const filePath = path.join(process.cwd(), "download", `${documentId}.json`)
+    const filePath = path.join(process.cwd(), "download", kind, `${documentId}.json`)
     const content = await readFile(filePath, "utf8")
 
     return new Response(content, {

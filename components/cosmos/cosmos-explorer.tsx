@@ -6,9 +6,9 @@ import {
   useMemo,
   useRef,
   useState,
-  type ReactNode,
+  startTransition,
 } from "react"
-import { ChevronRight, Download, FileText, FolderTree, Loader2, WandSparkles } from "lucide-react"
+import { ChevronRight, CloudDownload, Columns2, Download, FileText, FolderTree, HardDrive, Loader2, Rows2, Trash2, WandSparkles } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils"
 type CosmosItem = Record<string, unknown> & {
   id?: string
   blobFileName?: string
+  docType?: string
 }
 
 type QueryResponse = {
@@ -28,6 +29,7 @@ type QueryResponse = {
 
 type ItemResponse = {
   item?: CosmosItem
+  source?: "cache" | "fresh"
   error?: string
 }
 type PrepareResult = {
@@ -37,11 +39,20 @@ type PrepareResult = {
   documentId?: string
   data?: unknown
   details?: unknown
+  source?: "cache" | "fresh"
+  error?: string
+}
+
+type CacheStatusResponse = {
+  ok?: boolean
+  document?: "cache" | null
+  prepare?: "cache" | null
   error?: string
 }
 
 type FilterField = "id" | "docType" | "documentGroup" | "unixtime"
 type FilterMode = "exact" | "like"
+type ResultLayout = "horizontal" | "vertical"
 
 type AppliedFilter = {
   field: FilterField
@@ -120,94 +131,36 @@ function buildTree(items: CosmosItem[]): BatchNode[] {
 }
 
 function JsonViewer({ value }: { value: unknown }) {
-  const text = useMemo(() => JSON.stringify(value, null, 2), [value])
-  const lines = text.split("\n")
+  const text = useMemo(() => {
+    try {
+      return JSON.stringify(value, null, 2)
+    } catch {
+      return String(value)
+    }
+  }, [value])
 
   return (
-    <div className="h-full overflow-auto bg-[#1e1e1e] font-mono text-[13px] leading-5 text-[#d4d4d4]">
-      <div className="inline-block min-w-full">
-        {lines.map((line, index) => (
-          <div key={index} className="flex hover:bg-white/5">
-            <span className="sticky left-0 w-12 shrink-0 select-none bg-[#1e1e1e] pr-3 text-right text-[#858585]">
-              {index + 1}
-            </span>
-            <pre className="m-0 whitespace-pre-wrap break-all px-3">
-              {highlightJsonLine(line)}
-            </pre>
-          </div>
-        ))}
-      </div>
+    <div className="h-full overflow-auto bg-[#1e1e1e] p-3 font-mono text-[13px] leading-5 text-[#d4d4d4]">
+      <pre className="m-0 whitespace-pre-wrap break-all">{text}</pre>
     </div>
   )
 }
 
-function highlightJsonLine(line: string) {
-  const parts: ReactNode[] = []
-  const regex =
-    /("(?:\\.|[^"\\])*")(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|[{}\[\],]/g
+const MAX_PREPARE_PREVIEW_CHARS = 120_000
 
-  let lastIndex = 0
-  let match: RegExpExecArray | null
-
-  while ((match = regex.exec(line)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(
-        <span key={`t-${lastIndex}`} className="text-[#d4d4d4]">
-          {line.slice(lastIndex, match.index)}
-        </span>
-      )
+function formatPreparePreview(value: unknown) {
+  try {
+    const text = JSON.stringify(value, null, 2)
+    if (text.length <= MAX_PREPARE_PREVIEW_CHARS) {
+      return text
     }
-
-    const [full, stringLiteral, colon, keyword] = match
-
-    if (stringLiteral) {
-      parts.push(
-        <span
-          key={`s-${match.index}`}
-          className={colon ? "text-[#9cdcfe]" : "text-[#ce9178]"}
-        >
-          {stringLiteral}
-        </span>
-      )
-      if (colon) {
-        parts.push(
-          <span key={`c-${match.index}`} className="text-[#d4d4d4]">
-            {colon}
-          </span>
-        )
-      }
-    } else if (keyword) {
-      parts.push(
-        <span key={`k-${match.index}`} className="text-[#569cd6]">
-          {keyword}
-        </span>
-      )
-    } else if (/^-?\d/.test(full)) {
-      parts.push(
-        <span key={`n-${match.index}`} className="text-[#b5cea8]">
-          {full}
-        </span>
-      )
-    } else {
-      parts.push(
-        <span key={`p-${match.index}`} className="text-[#d4d4d4]">
-          {full}
-        </span>
-      )
-    }
-
-    lastIndex = match.index + full.length
-  }
-
-  if (lastIndex < line.length) {
-    parts.push(
-      <span key={`t-${lastIndex}`} className="text-[#d4d4d4]">
-        {line.slice(lastIndex)}
-      </span>
+    return (
+      text.slice(0, MAX_PREPARE_PREVIEW_CHARS) +
+      `\n\n… truncated (${text.length.toLocaleString()} chars total)`
     )
+  } catch {
+    return String(value)
   }
-
-  return parts
 }
 
 export function CosmosExplorer() {
@@ -231,16 +184,65 @@ export function CosmosExplorer() {
   const [downloading, setDownloading] = useState(false)
   const [preparing, setPreparing] = useState(false)
   const [actionMessage, setActionMessage] = useState<string | null>(null)
+  const [preparePreview, setPreparePreview] = useState<string | null>(null)
   const [prepareResult, setPrepareResult] = useState<PrepareResult | null>(null)
+  const [documentSource, setDocumentSource] = useState<"cache" | "fresh" | null>(null)
+  const [prepareSource, setPrepareSource] = useState<"cache" | "fresh" | null>(null)
+  const [flushingCache, setFlushingCache] = useState(false)
+  const [pageCacheMap, setPageCacheMap] = useState<
+    Record<string, { document: boolean; prepare: boolean; complete: boolean }>
+  >({})
+  const [zippingDocKey, setZippingDocKey] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [requestCharge, setRequestCharge] = useState<number | null>(null)
-  const [preparePaneWidth, setPreparePaneWidth] = useState(380)
+  const [resultSplitRatio, setResultSplitRatio] = useState(0.5)
+  const [resultLayout, setResultLayout] = useState<ResultLayout>("horizontal")
   const [hasSearched, setHasSearched] = useState(false)
   const [expandedBatches, setExpandedBatches] = useState<Set<string>>(new Set())
   const [expandedDocs, setExpandedDocs] = useState<Set<string>>(new Set())
   const rightSplitRef = useRef<HTMLDivElement | null>(null)
   const tree = useMemo(() => (hasSearched ? buildTree(items) : []), [hasSearched, items])
 
+  const allPageIds = useMemo(
+    () => tree.flatMap((batch) => batch.docs.flatMap((doc) => doc.pages.map((page) => page.id))),
+    [tree]
+  )
+
+  const refreshPageCacheMap = useCallback(async (documentIds: string[]) => {
+    if (documentIds.length === 0) {
+      setPageCacheMap({})
+      return
+    }
+    try {
+      const response = await fetch("/api/cosmos/cache/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ documentIds }),
+      })
+      const data = (await response.json()) as {
+        pages?: Record<string, { document: boolean; prepare: boolean; complete: boolean }>
+        error?: string
+      }
+      if (!response.ok) throw new Error(data.error || "Failed to load cache map")
+      setPageCacheMap(data.pages ?? {})
+    } catch {
+      // keep previous map on soft failure
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshPageCacheMap(allPageIds)
+  }, [allPageIds, refreshPageCacheMap])
+
+  const documentPaneStyle = useMemo(
+    () => ({ flex: `${1 - resultSplitRatio} 1 0%` }),
+    [resultSplitRatio]
+  )
+
+  const preparePaneStyle = useMemo(
+    () => ({ flex: `${resultSplitRatio} 1 0%` }),
+    [resultSplitRatio]
+  )
   const fetchItems = useCallback(
     async (filter: AppliedFilter, options?: { append?: boolean }) => {
       const append = Boolean(options?.append)
@@ -295,8 +297,33 @@ export function CosmosExplorer() {
   )
 
   useEffect(() => {
+    setPreparePreview(null)
     setPrepareResult(null)
     setDocument(null)
+    setDocumentSource(null)
+    setPrepareSource(null)
+
+    if (!selectedId) return
+
+    let cancelled = false
+    void (async () => {
+      try {
+        const response = await fetch(
+          `/api/cosmos/cache?documentId=${encodeURIComponent(selectedId)}`,
+          { cache: "no-store" }
+        )
+        const data = (await response.json()) as CacheStatusResponse
+        if (cancelled || !response.ok) return
+        setDocumentSource(data.document ?? null)
+        setPrepareSource(data.prepare ?? null)
+      } catch {
+        // ignore status probe errors
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
   }, [selectedId])
 
   function applyFilter() {
@@ -340,15 +367,18 @@ export function CosmosExplorer() {
     if (!container) return
 
     const rect = container.getBoundingClientRect()
-    const startX = event.clientX
-    const startWidth = preparePaneWidth
-    const minWidth = 260
-    const maxWidth = Math.max(minWidth, rect.width - 260)
+    const isHorizontal = resultLayout === "horizontal"
+    const minRatio = 0.2
+    const maxRatio = 0.8
 
     const onMouseMove = (moveEvent: MouseEvent) => {
-      const deltaX = startX - moveEvent.clientX
-      const nextWidth = Math.min(maxWidth, Math.max(minWidth, startWidth + deltaX))
-      setPreparePaneWidth(nextWidth)
+      if (isHorizontal) {
+        const next = (rect.right - moveEvent.clientX) / rect.width
+        setResultSplitRatio(Math.min(maxRatio, Math.max(minRatio, next)))
+        return
+      }
+      const next = (rect.bottom - moveEvent.clientY) / rect.height
+      setResultSplitRatio(Math.min(maxRatio, Math.max(minRatio, next)))
     }
 
     const onMouseUp = () => {
@@ -375,14 +405,21 @@ export function CosmosExplorer() {
     if (!response.ok || !data.item) {
       throw new Error(data.error || "Fetch by id failed")
     }
-    return data.item
+    return {
+      item: data.item,
+      source: data.source ?? "fresh",
+    }
   }
 
   async function ensureDocument(targetId: string) {
-    if (document?.id === targetId) return document
+    if (document?.id === targetId) {
+      return { item: document, source: documentSource ?? ("fresh" as const) }
+    }
     const fetched = await fetchDocumentById(targetId)
-    // Only update the right panel if user is still on the same selected page.
-    setDocument((prev) => (selectedId === targetId ? fetched : prev))
+    if (selectedId === targetId) {
+      setDocument(fetched.item)
+      setDocumentSource(fetched.source)
+    }
     return fetched
   }
 
@@ -393,9 +430,13 @@ export function CosmosExplorer() {
     setError(null)
     setActionMessage(null)
     try {
-      await ensureDocument(targetId)
+      const result = await ensureDocument(targetId)
       if (selectedId !== targetId) return
-      setActionMessage(`Fetched document by id: ${targetId}`)
+      setActionMessage(
+        result.source === "cache"
+          ? `Loaded from download cache: ${targetId}`
+          : `Fetched from Cosmos: ${targetId}`
+      )
     } catch (err) {
       setError(err instanceof Error ? err.message : "Fetch failed")
     } finally {
@@ -403,22 +444,101 @@ export function CosmosExplorer() {
     }
   }
 
+  async function runPrepare(targetId: string) {
+    // Prefer local prepare cache first — skip Cosmos + external API when possible.
+    if (prepareSource === "cache") {
+      const cachedResponse = await fetch("/api/cosmos/prepare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ documentId: targetId }),
+      })
+      const cachedData = (await cachedResponse.json()) as PrepareResult
+      if (cachedResponse.ok && cachedData.source === "cache") {
+        if (selectedId !== targetId) return null
+        const preview = formatPreparePreview(cachedData)
+        startTransition(() => setPreparePreview(preview))
+        setPrepareResult(cachedData)
+        setPrepareSource("cache")
+        await refreshPageCacheMap(allPageIds)
+        setActionMessage(`Loaded prepare cache: ${targetId}`)
+        return cachedData
+      }
+    }
+
+    const selected = await ensureDocument(targetId)
+    if (selectedId !== targetId) return null
+    const docType = typeof selected.item.docType === "string" ? selected.item.docType : ""
+    if (!docType) {
+      throw new Error("Selected document has no docType")
+    }
+
+    const response = await fetch("/api/cosmos/prepare", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        documentId: targetId,
+        docType,
+      }),
+    })
+    const data = (await response.json()) as PrepareResult
+    const preview = formatPreparePreview(data)
+    if (!response.ok) {
+      startTransition(() => setPreparePreview(preview))
+      throw new Error(data.error || "Prepare failed")
+    }
+
+    if (selectedId !== targetId) return null
+    startTransition(() => setPreparePreview(preview))
+    setPrepareResult(data)
+    setPrepareSource(data.source ?? "fresh")
+    await refreshPageCacheMap(allPageIds)
+    setActionMessage(
+      data.source === "cache"
+        ? `Loaded prepare cache: ${targetId}`
+        : `Prepared via ${data.url}`
+    )
+    return data
+  }
+
   async function handleDownload() {
     const targetId = selectedId
     if (!targetId) return
+
     setDownloading(true)
     setActionMessage(null)
     setError(null)
 
     try {
-      const selectedDocument = await ensureDocument(targetId)
-      if (selectedId !== targetId) return
+      let pageDocument = document?.id === targetId ? document : null
+      if (!pageDocument) {
+        const fetched = await ensureDocument(targetId)
+        if (selectedId !== targetId) return
+        pageDocument = fetched.item
+        setActionMessage(
+          fetched.source === "cache"
+            ? `Loaded from download cache: ${targetId}`
+            : `Fetched from Cosmos: ${targetId}`
+        )
+      }
+
+      let prepared = prepareResult
+      if (!prepared) {
+        prepared = await runPrepare(targetId)
+        if (!prepared || selectedId !== targetId) return
+      }
+
       const response = await fetch("/api/cosmos/download", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           documentId: targetId,
-          document: selectedDocument,
+          document: pageDocument,
+          prepare: prepared,
+          docType:
+            typeof pageDocument.docType === "string"
+              ? pageDocument.docType
+              : prepared.docType,
+          prepareUrl: prepared.url,
         }),
       })
       const data = (await response.json()) as {
@@ -426,10 +546,17 @@ export function CosmosExplorer() {
         path?: string
         documentId?: string
         storagePath?: string
+        prepareStoragePath?: string
       }
       if (!response.ok) throw new Error(data.error || "Download failed")
 
-      setActionMessage(`Saved to project storage: ${data.storagePath ?? data.path ?? targetId}`)
+      setDocumentSource("cache")
+      setPrepareSource("cache")
+      await refreshPageCacheMap(allPageIds)
+      setActionMessage(
+        `Saved page + prepare: ${data.storagePath ?? data.path ?? targetId}` +
+          (data.prepareStoragePath ? ` · ${data.prepareStoragePath}` : "")
+      )
     } catch (err) {
       setError(err instanceof Error ? err.message : "Download failed")
     } finally {
@@ -444,36 +571,121 @@ export function CosmosExplorer() {
     setPreparing(true)
     setActionMessage(null)
     setError(null)
+    setPreparePreview(null)
     setPrepareResult(null)
 
     try {
-      const selectedDocument = await ensureDocument(targetId)
-      if (selectedId !== targetId) return
-      const docType = typeof selectedDocument.docType === "string" ? selectedDocument.docType : ""
-      if (!docType) {
-        throw new Error("Selected document has no docType")
-      }
-      const response = await fetch("/api/cosmos/prepare", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          documentId: targetId,
-          docType,
-          document: selectedDocument,
-        }),
-      })
-      const data = (await response.json()) as PrepareResult
-      if (!response.ok) {
-        setPrepareResult(data)
-        throw new Error(data.error || "Prepare failed")
-      }
-
-      setPrepareResult(data)
-      setActionMessage(`Prepared via ${data.url}`)
+      await runPrepare(targetId)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Prepare failed")
     } finally {
       setPreparing(false)
+    }
+  }
+
+  async function handleFlushCache() {
+    setFlushingCache(true)
+    setError(null)
+    setActionMessage(null)
+    try {
+      const response = await fetch("/api/cosmos/cache", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          selectedId
+            ? { kind: "all", documentId: selectedId }
+            : { kind: "all" }
+        ),
+      })
+      const data = (await response.json()) as { error?: string }
+      if (!response.ok) throw new Error(data.error || "Flush cache failed")
+
+      setDocumentSource(null)
+      setPrepareSource(null)
+      setPreparePreview(null)
+      setPrepareResult(null)
+      if (selectedId) {
+        setDocument(null)
+      }
+      setActionMessage(
+        selectedId
+          ? `Flushed cache for ${selectedId}`
+          : "Flushed all download/prepare cache"
+      )
+      await refreshPageCacheMap(allPageIds)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Flush cache failed")
+    } finally {
+      setFlushingCache(false)
+    }
+  }
+
+  function docHasAnyCache(doc: DocNode) {
+    return doc.pages.some(
+      (page) => pageCacheMap[page.id]?.document || pageCacheMap[page.id]?.prepare
+    )
+  }
+
+  async function downloadZipBlob(kind: "raw" | "prepared", batchId: string, doc: DocNode) {
+    const response = await fetch("/api/cosmos/doc-zip", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        kind,
+        batchId,
+        docId: doc.docId,
+        pages: doc.pages.map((page) => ({ id: page.id, page: page.page })),
+      }),
+    })
+
+    if (response.status === 404) {
+      return { downloaded: false, included: 0 }
+    }
+
+    if (!response.ok) {
+      const data = (await response.json().catch(() => ({}))) as { error?: string }
+      throw new Error(data.error || `Failed to build ${kind} zip`)
+    }
+
+    const included = Number(response.headers.get("X-Included-Files") ?? "0")
+    const blob = await response.blob()
+    const url = URL.createObjectURL(blob)
+    const anchor = window.document.createElement("a")
+    const disposition = response.headers.get("Content-Disposition") ?? ""
+    const matched = disposition.match(/filename="([^"]+)"/)
+    anchor.href = url
+    anchor.download = matched?.[1] ?? `${batchId}_${doc.docId}_${kind}.zip`
+    window.document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(url)
+    return { downloaded: true, included }
+  }
+
+  async function handleDocZipDownload(batchId: string, doc: DocNode) {
+    const docKey = `${batchId}/${doc.docId}`
+    if (!docHasAnyCache(doc)) {
+      setError(`${doc.docId} ยังไม่มีไฟล์ cache ให้ zip`)
+      return
+    }
+
+    setZippingDocKey(docKey)
+    setError(null)
+    setActionMessage(null)
+    try {
+      const raw = await downloadZipBlob("raw", batchId, doc)
+      const prepared = await downloadZipBlob("prepared", batchId, doc)
+      const parts: string[] = []
+      if (raw.downloaded) parts.push(`raw (${raw.included})`)
+      if (prepared.downloaded) parts.push(`prepared (${prepared.included})`)
+      if (parts.length === 0) {
+        throw new Error("No cached files available to zip")
+      }
+      setActionMessage(`Downloaded zip for ${doc.docId}: ${parts.join(" · ")}`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Zip download failed")
+    } finally {
+      setZippingDocKey(null)
     }
   }
 
@@ -533,17 +745,18 @@ export function CosmosExplorer() {
         </Button>
       </div>
 
-      {error ? (
-        <div className="border-b border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-          {error}
-        </div>
-      ) : null}
-
-      {actionMessage ? (
-        <div className="border-b border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-          {actionMessage}
-        </div>
-      ) : null}
+      <div
+        className={cn(
+          "border-b px-3 py-2 text-sm",
+          error
+            ? "border-red-200 bg-red-50 text-red-700"
+            : actionMessage
+              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+              : "border-[#edebe9] bg-[#faf9f8] text-[#605e5c]"
+        )}
+      >
+        {error ?? actionMessage ?? "What you would like to do ?"}
+      </div>
 
       <div className="flex min-h-0 flex-1">
         <section className="flex w-[250px] shrink-0 flex-col border-r border-[#edebe9] bg-white">
@@ -587,16 +800,34 @@ export function CosmosExplorer() {
                         const openDoc = expandedDocs.has(docKey)
                         return (
                           <div key={doc.docId} className="ml-4 mt-0.5">
-                            <button
-                              type="button"
-                              onClick={() => toggleDoc(batch.batchId, doc.docId)}
-                              className="flex w-full items-center gap-1 rounded px-2 py-1 text-left font-medium text-[#605e5c] hover:bg-[#f3f2f1]"
-                            >
-                              <ChevronRight
-                                className={cn("size-3.5 transition-transform", openDoc && "rotate-90")}
-                              />
-                              <span>{doc.docId}</span>
-                            </button>
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => toggleDoc(batch.batchId, doc.docId)}
+                                className="flex min-w-0 flex-1 items-center gap-1 rounded px-2 py-1 text-left font-medium text-[#605e5c] hover:bg-[#f3f2f1]"
+                              >
+                                <ChevronRight
+                                  className={cn("size-3.5 transition-transform", openDoc && "rotate-90")}
+                                />
+                                <span className="truncate">{doc.docId}</span>
+                              </button>
+                              {docHasAnyCache(doc) ? (
+                                <button
+                                  type="button"
+                                  title="Download available raw/prepared zip"
+                                  disabled={zippingDocKey === docKey}
+                                  onClick={() => void handleDocZipDownload(batch.batchId, doc)}
+                                  className="mr-1 inline-flex h-6 items-center gap-1 rounded border border-[#8a8886] bg-white px-1.5 text-[11px] text-[#323130] hover:bg-[#f3f2f1] disabled:opacity-60"
+                                >
+                                  {zippingDocKey === docKey ? (
+                                    <Loader2 className="size-3 animate-spin" />
+                                  ) : (
+                                    <Download className="size-3" />
+                                  )}
+                                  Zip
+                                </button>
+                              ) : null}
+                            </div>
                             {openDoc &&
                               doc.pages.map((page) => (
                                 <button
@@ -611,6 +842,11 @@ export function CosmosExplorer() {
                                 >
                                   <FileText className="size-3.5 shrink-0 text-[#605e5c]" />
                                   <span className="truncate">{page.page}</span>
+                                  {pageCacheMap[page.id]?.complete ? (
+                                    <span className="ml-auto rounded bg-emerald-50 px-1 text-[10px] text-emerald-700">
+                                      cached
+                                    </span>
+                                  ) : null}
                                 </button>
                               ))}
                           </div>
@@ -650,6 +886,56 @@ export function CosmosExplorer() {
               {selectedId ? `Page · ${selectedBlobFileName ?? selectedId}` : "Document JSON"}
             </span>
             <div className="flex shrink-0 items-center gap-1.5">
+              <div className="mr-1 flex items-center gap-1 text-[11px]">
+                <span
+                  className={cn(
+                    "rounded px-1.5 py-0.5",
+                    documentSource === "cache"
+                      ? "bg-emerald-900/60 text-emerald-300"
+                      : documentSource === "fresh"
+                        ? "bg-sky-900/60 text-sky-300"
+                        : "bg-[#2d2d2d] text-[#858585]"
+                  )}
+                >
+                  Doc: {documentSource ?? "—"}
+                </span>
+                <span
+                  className={cn(
+                    "rounded px-1.5 py-0.5",
+                    prepareSource === "cache"
+                      ? "bg-emerald-900/60 text-emerald-300"
+                      : prepareSource === "fresh"
+                        ? "bg-sky-900/60 text-sky-300"
+                        : "bg-[#2d2d2d] text-[#858585]"
+                  )}
+                >
+                  Prep: {prepareSource ?? "—"}
+                </span>
+              </div>
+              <div className="mr-1 flex overflow-hidden rounded border border-[#555]">
+                <button
+                  type="button"
+                  title="ซ้อนแนวนอน"
+                  onClick={() => setResultLayout("horizontal")}
+                  className={cn(
+                    "inline-flex h-7 items-center justify-center px-2 text-[#cccccc] hover:bg-[#3a3a3a]",
+                    resultLayout === "horizontal" && "bg-[#0078d4] text-white hover:bg-[#106ebe]"
+                  )}
+                >
+                  <Columns2 className="size-3.5" />
+                </button>
+                <button
+                  type="button"
+                  title="ซ้อนแนวตั้ง"
+                  onClick={() => setResultLayout("vertical")}
+                  className={cn(
+                    "inline-flex h-7 items-center justify-center border-l border-[#555] px-2 text-[#cccccc] hover:bg-[#3a3a3a]",
+                    resultLayout === "vertical" && "bg-[#0078d4] text-white hover:bg-[#106ebe]"
+                  )}
+                >
+                  <Rows2 className="size-3.5" />
+                </button>
+              </div>
               <Button
                 type="button"
                 size="sm"
@@ -658,23 +944,12 @@ export function CosmosExplorer() {
                 onClick={() => void handleFetchDocument()}
                 className="h-7 rounded-sm border-[#555] bg-[#2d2d2d] text-[#cccccc] hover:bg-[#3a3a3a] hover:text-white"
               >
-                {fetchingDocument ? <Loader2 className="size-3.5 animate-spin" /> : null}
-                Fetch
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={!selectedId || downloading}
-                onClick={() => void handleDownload()}
-                className="h-7 rounded-sm border-[#555] bg-[#2d2d2d] text-[#cccccc] hover:bg-[#3a3a3a] hover:text-white"
-              >
-                {downloading ? (
+                {fetchingDocument ? (
                   <Loader2 className="size-3.5 animate-spin" />
                 ) : (
-                  <Download className="size-3.5" />
+                  <CloudDownload className="size-3.5" />
                 )}
-                Download
+                Fetch
               </Button>
               <Button
                 type="button"
@@ -690,10 +965,48 @@ export function CosmosExplorer() {
                 )}
                 Prepare
               </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={!selectedId || downloading || fetchingDocument || preparing}
+                onClick={() => void handleDownload()}
+                title="Fetch + Prepare if needed, then cache to storage"
+                className="h-7 rounded-sm border-[#555] bg-[#2d2d2d] text-[#cccccc] hover:bg-[#3a3a3a] hover:text-white"
+              >
+                {downloading ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <HardDrive className="size-3.5" />
+                )}
+                Cache
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={flushingCache}
+                onClick={() => void handleFlushCache()}
+                className="h-7 rounded-sm border-[#555] bg-[#2d2d2d] text-[#cccccc] hover:bg-[#3a3a3a] hover:text-white"
+                title={selectedId ? `Flush cache for selected page` : "Flush all cache"}
+              >
+                {flushingCache ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="size-3.5" />
+                )}
+                Flush
+              </Button>
             </div>
           </div>
-          <div ref={rightSplitRef} className="min-h-0 flex flex-1">
-            <div className="min-h-0 min-w-0 flex-1">
+          <div
+            ref={rightSplitRef}
+            className={cn(
+              "min-h-0 flex flex-1",
+              resultLayout === "vertical" ? "flex-col" : "flex-row"
+            )}
+          >
+            <div className="min-h-0 min-w-0" style={documentPaneStyle}>
               {document ? (
                 <JsonViewer value={document} />
               ) : (
@@ -704,21 +1017,29 @@ export function CosmosExplorer() {
             </div>
             <div
               role="separator"
-              aria-orientation="vertical"
-              className="w-1.5 cursor-col-resize bg-[#2a2a2a] transition-colors hover:bg-[#3b82f6]"
+              aria-orientation={resultLayout === "horizontal" ? "vertical" : "horizontal"}
+              className={cn(
+                "shrink-0 bg-[#2a2a2a] transition-colors hover:bg-[#3b82f6]",
+                resultLayout === "horizontal"
+                  ? "w-1.5 cursor-col-resize"
+                  : "h-1.5 cursor-row-resize"
+              )}
               onMouseDown={startResizePreparePane}
             />
             <div
-              className="min-h-0 shrink-0 border-l border-[#333] bg-[#181818]"
-              style={{ width: `${preparePaneWidth}px` }}
+              className={cn(
+                "min-h-0 min-w-0 bg-[#181818]",
+                resultLayout === "horizontal" ? "border-l border-[#333]" : "border-t border-[#333]"
+              )}
+              style={preparePaneStyle}
             >
               <div className="border-b border-[#333] px-3 py-2 text-xs font-medium text-[#cccccc]">
                 Prepare Result
               </div>
               <div className="h-[calc(100%-33px)] overflow-auto p-3 font-mono text-xs text-[#d4d4d4]">
-                {prepareResult ? (
+                {preparePreview ? (
                   <pre className="m-0 whitespace-pre-wrap break-all">
-                    {JSON.stringify(prepareResult, null, 2)}
+                    {preparePreview}
                   </pre>
                 ) : (
                   <span className="text-[#858585]">Prepare result will appear here</span>

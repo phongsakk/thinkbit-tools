@@ -1,4 +1,5 @@
 import { resolvePrepareUrl } from "@/lib/ocr-prepare-config"
+import { getCachedPrepare, savePrepareResult } from "@/lib/local-cache"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -6,7 +7,7 @@ export const dynamic = "force-dynamic"
 type PrepareBody = {
   documentId?: string
   docType?: string
-  document?: Record<string, unknown>
+  forceFresh?: boolean
 }
 
 type LoginResponse = {
@@ -20,6 +21,8 @@ type LoginResponse = {
 
 const AUTH_LOGIN_URL = "https://api-oil.devthinkbit.com/api/auth/login"
 
+let cachedToken: { value: string; expiresAt: number } | null = null
+
 function getLoginCredentials() {
   return {
     email: process.env.OCR_PREPARE_EMAIL ?? "ja.test006+shell@gmail.com",
@@ -28,6 +31,10 @@ function getLoginCredentials() {
 }
 
 async function getPrepareBearerToken() {
+  if (cachedToken && cachedToken.expiresAt > Date.now()) {
+    return cachedToken.value
+  }
+
   const credentials = getLoginCredentials()
   const authResponse = await fetch(AUTH_LOGIN_URL, {
     method: "POST",
@@ -65,22 +72,36 @@ async function getPrepareBearerToken() {
     throw new Error("Auth token not found in login response")
   }
 
+  cachedToken = {
+    value: token,
+    expiresAt: Date.now() + 25 * 60 * 1000,
+  }
+
   return token
 }
 
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as PrepareBody
-    const documentId =
-      body.documentId?.trim() ||
-      (typeof body.document?.id === "string" ? body.document.id : "")
-    const docType =
-      body.docType?.trim() ||
-      (typeof body.document?.docType === "string" ? body.document.docType : "")
+    const documentId = body.documentId?.trim() ?? ""
+    const docType = body.docType?.trim() ?? ""
+    const forceFresh = Boolean(body.forceFresh)
 
     if (!documentId) {
       return Response.json({ error: "documentId is required" }, { status: 400 })
     }
+
+    if (!forceFresh) {
+      const cached = await getCachedPrepare(documentId)
+      if (cached) {
+        return Response.json({
+          ...cached.payload,
+          source: "cache",
+          entry: cached.entry,
+        })
+      }
+    }
+
     if (!docType) {
       return Response.json({ error: "docType is required" }, { status: 400 })
     }
@@ -94,31 +115,14 @@ export async function POST(request: Request) {
     }
 
     const token = await getPrepareBearerToken()
-    const headers = {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      Authorization: `Bearer ${token}`,
-    }
-
-    let methodUsed: "POST" | "GET" = "POST"
-    let upstream = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body.document ?? { id: documentId, docType }),
+    const upstream = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${token}`,
+      },
       cache: "no-store",
     })
-
-    if (upstream.status === 404) {
-      methodUsed = "GET"
-      upstream = await fetch(url, {
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        cache: "no-store",
-      })
-    }
 
     const contentType = upstream.headers.get("content-type") ?? ""
     const rawText = await upstream.text()
@@ -132,6 +136,9 @@ export async function POST(request: Request) {
     }
 
     if (!upstream.ok) {
+      if (upstream.status === 401 || upstream.status === 403) {
+        cachedToken = null
+      }
       return Response.json(
         {
           error: `Prepare API failed (${upstream.status})`,
@@ -142,13 +149,20 @@ export async function POST(request: Request) {
       )
     }
 
-    return Response.json({
+    const payload = {
       ok: true,
       url,
-      method: methodUsed,
+      method: "GET",
       docType,
       documentId,
       data,
+    }
+
+    await savePrepareResult(documentId, payload, { docType, url })
+
+    return Response.json({
+      ...payload,
+      source: "fresh",
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : "Prepare failed"
