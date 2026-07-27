@@ -18,6 +18,10 @@
 # production
 /build
 
+# downloaded cosmos documents
+/download/*
+!/download/.gitkeep
+
 # misc
 .DS_Store
 *.pem

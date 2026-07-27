@@ -4,10 +4,11 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react"
-import { ChevronRight, Home, Loader2, X } from "lucide-react"
+import { ChevronRight, Download, FileText, FolderTree, Loader2, WandSparkles } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -15,10 +16,6 @@ import { cn } from "@/lib/utils"
 type CosmosItem = Record<string, unknown> & {
   id?: string
   blobFileName?: string
-  docType?: string
-  page_number?: number | string
-  pageNumber?: number | string
-  pageCount?: number | string
 }
 
 type QueryResponse = {
@@ -26,23 +23,100 @@ type QueryResponse = {
   continuationToken: string | null
   hasMore: boolean
   requestCharge?: number
-  databaseId?: string
-  containerId?: string
   error?: string
 }
 
-const DEFAULT_QUERY =
-  'SELECT * FROM c WHERE c.docType like "%05-03%" and (IS_DEFINED(c.pageNumber) = false or c.pageNumber = "1" or c.pageNumber = 1)'
+type ItemResponse = {
+  item?: CosmosItem
+  error?: string
+}
+type PrepareResult = {
+  ok?: boolean
+  url?: string
+  docType?: string
+  documentId?: string
+  data?: unknown
+  details?: unknown
+  error?: string
+}
 
-const TABLE_COLUMNS = ["id", "blobFileName", "docType", "page_number"] as const
+type FilterField = "id" | "docType" | "documentGroup" | "unixtime"
+type FilterMode = "exact" | "like"
 
-function cellValue(item: CosmosItem, key: (typeof TABLE_COLUMNS)[number]): string {
-  const value =
-    key === "page_number"
-      ? (item.page_number ?? item.pageNumber ?? item.pageCount)
-      : item[key]
-  if (value == null || value === "") return "—"
-  return String(value)
+type AppliedFilter = {
+  field: FilterField
+  mode: FilterMode
+  value: string
+}
+
+const selectClassName =
+  "h-9 rounded border border-[#8a8886] bg-white px-2 text-sm text-[#323130] outline-none focus:border-[#0078d4] focus:ring-1 focus:ring-[#0078d4]"
+
+const inputClassName =
+  "h-9 min-w-0 flex-1 rounded border border-[#8a8886] bg-white px-3 text-sm text-[#323130] outline-none focus:border-[#0078d4] focus:ring-1 focus:ring-[#0078d4]"
+
+type PageNode = {
+  id: string
+  page: string
+  blobFileName: string
+}
+
+type DocNode = {
+  docId: string
+  pages: PageNode[]
+}
+
+type BatchNode = {
+  batchId: string
+  docs: DocNode[]
+}
+
+function parseBlobFileName(blobFileName: string) {
+  const parts = blobFileName.split("/")
+  const meta = parts.find((part) => /DOC\d+/i.test(part)) ?? parts[1] ?? ""
+  const metaParts = meta.split("-")
+  const batchIdMatch = meta.match(/\b(\d{10,})\b/)
+  const batchId = batchIdMatch?.[1] ?? metaParts[1] ?? "unknown"
+  const docId =
+    metaParts.find((part) => /^DOC\d+/i.test(part)) ??
+    meta.match(/DOC\d+/i)?.[0] ??
+    "DOC_UNKNOWN"
+  const fileName = parts[parts.length - 1] ?? ""
+  const page = fileName.replace(/\.[^.]+$/, "") || fileName
+
+  return { batchId, docId, page }
+}
+
+function buildTree(items: CosmosItem[]): BatchNode[] {
+  const batchMap = new Map<string, Map<string, PageNode[]>>()
+
+  for (const item of items) {
+    if (typeof item.id !== "string" || typeof item.blobFileName !== "string") continue
+    const { batchId, docId, page } = parseBlobFileName(item.blobFileName)
+    if (!batchMap.has(batchId)) {
+      batchMap.set(batchId, new Map())
+    }
+    const docMap = batchMap.get(batchId)!
+    if (!docMap.has(docId)) {
+      docMap.set(docId, [])
+    }
+    docMap.get(docId)!.push({ id: item.id, page, blobFileName: item.blobFileName })
+  }
+
+  const sortByPage = (a: PageNode, b: PageNode) =>
+    a.page.localeCompare(b.page, undefined, { numeric: true, sensitivity: "base" })
+
+  return Array.from(batchMap.entries())
+    .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
+    .map(([batchId, docMap]) => ({
+      batchId,
+      docs: Array.from(docMap.entries())
+        .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
+        .map(([docId, pages]) => ({
+          docId,
+          pages: pages.sort(sortByPage),
+        })),
+    }))
 }
 
 function JsonViewer({ value }: { value: unknown }) {
@@ -137,28 +211,40 @@ function highlightJsonLine(line: string) {
 }
 
 export function CosmosExplorer() {
-  const [query, setQuery] = useState(DEFAULT_QUERY)
-  const [appliedQuery, setAppliedQuery] = useState(DEFAULT_QUERY)
+  const [field, setField] = useState<FilterField>("unixtime")
+  const [mode, setMode] = useState<FilterMode>("like")
+  const [value, setValue] = useState("")
+  const [appliedFilter, setAppliedFilter] = useState<AppliedFilter>({
+    field: "unixtime",
+    mode: "like",
+    value: "",
+  })
   const [items, setItems] = useState<CosmosItem[]>([])
   const [continuationToken, setContinuationToken] = useState<string | null>(null)
   const [hasMore, setHasMore] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set())
+  const [selectedBlobFileName, setSelectedBlobFileName] = useState<string | null>(null)
+  const [document, setDocument] = useState<CosmosItem | null>(null)
   const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [fetchingDocument, setFetchingDocument] = useState(false)
+  const [downloading, setDownloading] = useState(false)
+  const [preparing, setPreparing] = useState(false)
+  const [actionMessage, setActionMessage] = useState<string | null>(null)
+  const [prepareResult, setPrepareResult] = useState<PrepareResult | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [meta, setMeta] = useState({ databaseId: "document-data", containerId: "doc-data" })
   const [requestCharge, setRequestCharge] = useState<number | null>(null)
-
-  const selectedItem = useMemo(
-    () => items.find((item) => item.id === selectedId) ?? null,
-    [items, selectedId]
-  )
+  const [preparePaneWidth, setPreparePaneWidth] = useState(380)
+  const [hasSearched, setHasSearched] = useState(false)
+  const [expandedBatches, setExpandedBatches] = useState<Set<string>>(new Set())
+  const [expandedDocs, setExpandedDocs] = useState<Set<string>>(new Set())
+  const rightSplitRef = useRef<HTMLDivElement | null>(null)
+  const tree = useMemo(() => (hasSearched ? buildTree(items) : []), [hasSearched, items])
 
   const fetchItems = useCallback(
-    async (options: { queryText: string; token?: string | null; append?: boolean }) => {
-      const isAppend = Boolean(options.append)
-      if (isAppend) setLoadingMore(true)
+    async (filter: AppliedFilter, options?: { append?: boolean }) => {
+      const append = Boolean(options?.append)
+      if (append) setLoadingMore(true)
       else setLoading(true)
       setError(null)
 
@@ -167,9 +253,12 @@ export function CosmosExplorer() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            query: options.queryText,
-            continuationToken: options.token ?? null,
-            maxItemCount: 50,
+            field: filter.field,
+            mode: filter.mode,
+            value: filter.value,
+            selectLite: true,
+            maxItemCount: 120,
+            continuationToken: append ? continuationToken : null,
           }),
         })
 
@@ -178,24 +267,22 @@ export function CosmosExplorer() {
           throw new Error(data.error || "Failed to query Cosmos DB")
         }
 
-        setItems((prev) => (isAppend ? [...prev, ...data.items] : data.items))
+        setItems((prev) => (append ? [...prev, ...data.items] : data.items))
         setContinuationToken(data.continuationToken)
-        setHasMore(data.hasMore)
-        setRequestCharge(data.requestCharge ?? null)
-        if (data.databaseId && data.containerId) {
-          setMeta({ databaseId: data.databaseId, containerId: data.containerId })
-        }
+        setHasMore(Boolean(data.continuationToken))
+        setRequestCharge((prev) => (append ? (prev ?? 0) + (data.requestCharge ?? 0) : (data.requestCharge ?? 0)))
 
-        if (!isAppend) {
-          setCheckedIds(new Set())
-          const firstId = data.items[0]?.id
-          setSelectedId(typeof firstId === "string" ? firstId : null)
+        if (!append) {
+          setSelectedId(null)
+          setSelectedBlobFileName(null)
+          setDocument(null)
+          setExpandedBatches(new Set())
+          setExpandedDocs(new Set())
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Query failed")
-        if (!isAppend) {
+        if (!append) {
           setItems([])
-          setSelectedId(null)
           setContinuationToken(null)
           setHasMore(false)
         }
@@ -204,90 +291,242 @@ export function CosmosExplorer() {
         setLoadingMore(false)
       }
     },
-    []
+    [continuationToken]
   )
 
   useEffect(() => {
-    void fetchItems({ queryText: DEFAULT_QUERY })
-  }, [fetchItems])
+    setPrepareResult(null)
+    setDocument(null)
+  }, [selectedId])
 
   function applyFilter() {
-    setAppliedQuery(query)
-    void fetchItems({ queryText: query })
+    const nextFilter: AppliedFilter = {
+      field,
+      mode,
+      value: value.trim(),
+    }
+    setHasSearched(true)
+    setAppliedFilter(nextFilter)
+    void fetchItems(nextFilter)
   }
 
-  function loadMore() {
-    if (!continuationToken || loadingMore) return
-    void fetchItems({
-      queryText: appliedQuery,
-      token: continuationToken,
-      append: true,
-    })
+  function loadMoreLiteRows() {
+    if (!hasMore || loadingMore) return
+    void fetchItems(appliedFilter, { append: true })
   }
 
-  function toggleChecked(id: string) {
-    setCheckedIds((prev) => {
+  function toggleBatch(batchId: string) {
+    setExpandedBatches((prev) => {
       const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
+      if (next.has(batchId)) next.delete(batchId)
+      else next.add(batchId)
       return next
     })
   }
 
-  function toggleAllChecked() {
-    if (checkedIds.size === items.length) {
-      setCheckedIds(new Set())
-      return
+  function toggleDoc(batchId: string, docId: string) {
+    const key = `${batchId}/${docId}`
+    setExpandedDocs((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  function startResizePreparePane(event: React.MouseEvent<HTMLDivElement>) {
+    event.preventDefault()
+    const container = rightSplitRef.current
+    if (!container) return
+
+    const rect = container.getBoundingClientRect()
+    const startX = event.clientX
+    const startWidth = preparePaneWidth
+    const minWidth = 260
+    const maxWidth = Math.max(minWidth, rect.width - 260)
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const deltaX = startX - moveEvent.clientX
+      const nextWidth = Math.min(maxWidth, Math.max(minWidth, startWidth + deltaX))
+      setPreparePaneWidth(nextWidth)
     }
-    setCheckedIds(
-      new Set(items.map((item) => item.id).filter((id): id is string => typeof id === "string"))
-    )
+
+    const onMouseUp = () => {
+      window.removeEventListener("mousemove", onMouseMove)
+      window.removeEventListener("mouseup", onMouseUp)
+    }
+
+    window.addEventListener("mousemove", onMouseMove)
+    window.addEventListener("mouseup", onMouseUp)
+  }
+
+  function selectPage(page: PageNode) {
+    setSelectedId(page.id)
+    setSelectedBlobFileName(page.blobFileName)
+    setActionMessage(null)
+    setError(null)
+  }
+
+  async function fetchDocumentById(id: string) {
+    const response = await fetch(`/api/cosmos/item/${encodeURIComponent(id)}`, {
+      cache: "no-store",
+    })
+    const data = (await response.json()) as ItemResponse
+    if (!response.ok || !data.item) {
+      throw new Error(data.error || "Fetch by id failed")
+    }
+    return data.item
+  }
+
+  async function ensureDocument(targetId: string) {
+    if (document?.id === targetId) return document
+    const fetched = await fetchDocumentById(targetId)
+    // Only update the right panel if user is still on the same selected page.
+    setDocument((prev) => (selectedId === targetId ? fetched : prev))
+    return fetched
+  }
+
+  async function handleFetchDocument() {
+    const targetId = selectedId
+    if (!targetId) return
+    setFetchingDocument(true)
+    setError(null)
+    setActionMessage(null)
+    try {
+      await ensureDocument(targetId)
+      if (selectedId !== targetId) return
+      setActionMessage(`Fetched document by id: ${targetId}`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Fetch failed")
+    } finally {
+      setFetchingDocument(false)
+    }
+  }
+
+  async function handleDownload() {
+    const targetId = selectedId
+    if (!targetId) return
+    setDownloading(true)
+    setActionMessage(null)
+    setError(null)
+
+    try {
+      const selectedDocument = await ensureDocument(targetId)
+      if (selectedId !== targetId) return
+      const response = await fetch("/api/cosmos/download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          documentId: targetId,
+          document: selectedDocument,
+        }),
+      })
+      const data = (await response.json()) as {
+        error?: string
+        path?: string
+        documentId?: string
+        storagePath?: string
+      }
+      if (!response.ok) throw new Error(data.error || "Download failed")
+
+      setActionMessage(`Saved to project storage: ${data.storagePath ?? data.path ?? targetId}`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Download failed")
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  async function handlePrepare() {
+    const targetId = selectedId
+    if (!targetId) return
+
+    setPreparing(true)
+    setActionMessage(null)
+    setError(null)
+    setPrepareResult(null)
+
+    try {
+      const selectedDocument = await ensureDocument(targetId)
+      if (selectedId !== targetId) return
+      const docType = typeof selectedDocument.docType === "string" ? selectedDocument.docType : ""
+      if (!docType) {
+        throw new Error("Selected document has no docType")
+      }
+      const response = await fetch("/api/cosmos/prepare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          documentId: targetId,
+          docType,
+          document: selectedDocument,
+        }),
+      })
+      const data = (await response.json()) as PrepareResult
+      if (!response.ok) {
+        setPrepareResult(data)
+        throw new Error(data.error || "Prepare failed")
+      }
+
+      setPrepareResult(data)
+      setActionMessage(`Prepared via ${data.url}`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Prepare failed")
+    } finally {
+      setPreparing(false)
+    }
   }
 
   return (
     <div className="flex h-svh flex-col bg-[#f3f2f1] text-[#323130]">
-      <header className="flex h-10 items-center gap-1 border-b border-[#edebe9] bg-white px-3 text-sm">
-        <Home className="size-4 text-[#605e5c]" />
-        <ChevronRight className="size-3.5 text-[#a19f9d]" />
-        <span className="text-[#605e5c]">{meta.databaseId}</span>
-        <ChevronRight className="size-3.5 text-[#a19f9d]" />
-        <span className="font-medium text-[#323130]">{meta.containerId} Items</span>
-      </header>
+      <div className="flex flex-wrap items-center gap-2 border-b border-[#edebe9] bg-white px-3 py-2">
+        <select
+          value={field}
+          onChange={(e) => setField(e.target.value as FilterField)}
+          className={cn(selectClassName, "w-[160px]")}
+          aria-label="Filter field"
+        >
+          <option value="unixtime">unixtime</option>
+          <option value="id">id</option>
+          <option value="docType">docType</option>
+          <option value="documentGroup">documentGroup</option>
+        </select>
 
-      <div className="flex border-b border-[#edebe9] bg-[#faf9f8] px-2 pt-1">
-        <div className="flex items-center gap-2 rounded-t border border-b-0 border-[#edebe9] bg-white px-3 py-1.5 text-sm shadow-sm">
-          <span className="max-w-[180px] truncate">{meta.containerId} Items</span>
-          <button
-            type="button"
-            className="rounded p-0.5 text-[#605e5c] hover:bg-[#f3f2f1]"
-            aria-label="Close tab"
-          >
-            <X className="size-3.5" />
-          </button>
-        </div>
-      </div>
+        <select
+          value={mode}
+          onChange={(e) => setMode(e.target.value as FilterMode)}
+          className={cn(selectClassName, "w-[110px]")}
+          aria-label="Match mode"
+        >
+          <option value="exact">exact</option>
+          <option value="like">like</option>
+        </select>
 
-      <div className="flex items-stretch gap-2 border-b border-[#edebe9] bg-white px-3 py-2">
-        <div className="relative min-w-0 flex-1">
-          <textarea
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault()
-                applyFilter()
-              }
-            }}
-            rows={2}
-            spellCheck={false}
-            className="w-full resize-y rounded border border-[#8a8886] bg-white px-3 py-2 font-mono text-sm text-[#323130] outline-none focus:border-[#0078d4] focus:ring-1 focus:ring-[#0078d4]"
-          />
-        </div>
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault()
+              applyFilter()
+            }
+          }}
+          placeholder={
+            field === "unixtime"
+              ? "เช่น 1785139899152 (จะค้นจาก blobFileName)"
+              : mode === "like"
+                ? "ค้นหาแบบมีคำนี้อยู่ในค่า…"
+                : "ค้นหาค่าตรงทั้งหมด…"
+          }
+          className={inputClassName}
+        />
+
         <Button
           type="button"
           onClick={applyFilter}
           disabled={loading}
-          className="h-auto self-start rounded-sm bg-[#0078d4] px-4 text-white hover:bg-[#106ebe]"
+          className="h-9 rounded-sm bg-[#0078d4] px-4 text-white hover:bg-[#106ebe]"
         >
           {loading ? <Loader2 className="size-4 animate-spin" /> : null}
           Apply Filter
@@ -300,117 +539,192 @@ export function CosmosExplorer() {
         </div>
       ) : null}
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-2">
-        <section className="flex min-h-0 flex-col border-r border-[#edebe9] bg-white">
+      {actionMessage ? (
+        <div className="border-b border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+          {actionMessage}
+        </div>
+      ) : null}
+
+      <div className="flex min-h-0 flex-1">
+        <section className="flex w-[250px] shrink-0 flex-col border-r border-[#edebe9] bg-white">
+          <div className="flex items-center justify-between border-b border-[#edebe9] bg-[#faf9f8] px-3 py-2 text-xs text-[#605e5c]">
+            <div className="flex items-center gap-1.5">
+              <FolderTree className="size-3.5" />
+              <span>Results</span>
+            </div>
+            <span>{hasSearched ? `${tree.length} batch` : "—"}</span>
+          </div>
           <div className="min-h-0 flex-1 overflow-auto">
-            <table className="w-full border-collapse text-left text-sm">
-              <thead className="sticky top-0 z-10 bg-[#faf9f8]">
-                <tr className="border-b border-[#edebe9] text-[#605e5c]">
-                  <th className="w-10 px-3 py-2 font-medium">
-                    <input
-                      type="checkbox"
-                      checked={items.length > 0 && checkedIds.size === items.length}
-                      onChange={toggleAllChecked}
-                      className="size-3.5 accent-[#0078d4]"
-                      aria-label="Select all"
-                    />
-                  </th>
-                  {TABLE_COLUMNS.map((column) => (
-                    <th key={column} className="px-3 py-2 font-medium whitespace-nowrap">
-                      {column}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {loading && items.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="px-3 py-10 text-center text-[#605e5c]">
-                      <Loader2 className="mx-auto mb-2 size-5 animate-spin" />
-                      Querying Cosmos DB…
-                    </td>
-                  </tr>
-                ) : items.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="px-3 py-10 text-center text-[#605e5c]">
-                      No items found
-                    </td>
-                  </tr>
-                ) : (
-                  items.map((item, index) => {
-                    const id = typeof item.id === "string" ? item.id : `row-${index}`
-                    const selected = selectedId === item.id
-                    return (
-                      <tr
-                        key={id}
-                        onClick={() => setSelectedId(typeof item.id === "string" ? item.id : null)}
-                        className={cn(
-                          "cursor-pointer border-b border-[#f3f2f1] hover:bg-[#f3f2f1]",
-                          selected && "bg-[#deecf9] hover:bg-[#c7e0f4]"
-                        )}
-                      >
-                        <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
-                          <input
-                            type="checkbox"
-                            checked={checkedIds.has(id)}
-                            onChange={() => toggleChecked(id)}
-                            className="size-3.5 accent-[#0078d4]"
-                            aria-label={`Select ${id}`}
-                          />
-                        </td>
-                        {TABLE_COLUMNS.map((column) => (
-                          <td
-                            key={column}
-                            className="max-w-[220px] truncate px-3 py-2 whitespace-nowrap"
-                            title={cellValue(item, column)}
-                          >
-                            {cellValue(item, column)}
-                          </td>
-                        ))}
-                      </tr>
-                    )
-                  })
-                )}
-              </tbody>
-            </table>
+            {!hasSearched ? (
+              <div className="px-3 py-10 text-center text-[#605e5c]">
+                กรองแล้วกด Apply Filter เพื่อแสดงรายการ
+              </div>
+            ) : loading ? (
+              <div className="px-3 py-10 text-center text-[#605e5c]">
+                <Loader2 className="mx-auto mb-2 size-5 animate-spin" />
+                Querying Cosmos DB…
+              </div>
+            ) : tree.length === 0 ? (
+              <div className="px-3 py-10 text-center text-[#605e5c]">No items found</div>
+            ) : (
+              <div className="px-2 py-2 text-sm">
+                {tree.map((batch) => (
+                  <div key={batch.batchId} className="mb-1">
+                    <button
+                      type="button"
+                      onClick={() => toggleBatch(batch.batchId)}
+                      className="flex w-full items-center gap-1 rounded px-2 py-1 text-left font-semibold text-[#323130] hover:bg-[#f3f2f1]"
+                    >
+                      <ChevronRight
+                        className={cn("size-3.5 transition-transform", expandedBatches.has(batch.batchId) && "rotate-90")}
+                      />
+                      <span>{batch.batchId}</span>
+                    </button>
+
+                    {expandedBatches.has(batch.batchId) &&
+                      batch.docs.map((doc) => {
+                        const docKey = `${batch.batchId}/${doc.docId}`
+                        const openDoc = expandedDocs.has(docKey)
+                        return (
+                          <div key={doc.docId} className="ml-4 mt-0.5">
+                            <button
+                              type="button"
+                              onClick={() => toggleDoc(batch.batchId, doc.docId)}
+                              className="flex w-full items-center gap-1 rounded px-2 py-1 text-left font-medium text-[#605e5c] hover:bg-[#f3f2f1]"
+                            >
+                              <ChevronRight
+                                className={cn("size-3.5 transition-transform", openDoc && "rotate-90")}
+                              />
+                              <span>{doc.docId}</span>
+                            </button>
+                            {openDoc &&
+                              doc.pages.map((page) => (
+                                <button
+                                  key={page.id}
+                                  type="button"
+                                  className={cn(
+                                    "ml-5 flex w-[calc(100%-1.25rem)] items-center gap-1 rounded px-2 py-1 text-left text-[#323130] hover:bg-[#deecf9]",
+                                    selectedId === page.id && "bg-[#c7e0f4]"
+                                  )}
+                                  onClick={() => selectPage(page)}
+                                  title={page.blobFileName}
+                                >
+                                  <FileText className="size-3.5 shrink-0 text-[#605e5c]" />
+                                  <span className="truncate">{page.page}</span>
+                                </button>
+                              ))}
+                          </div>
+                        )
+                      })}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
-          <div className="flex items-center justify-between border-t border-[#edebe9] bg-[#faf9f8] px-3 py-2 text-xs text-[#605e5c]">
-            <span>
-              {items.length} item{items.length === 1 ? "" : "s"}
-              {requestCharge != null ? ` · ${requestCharge.toFixed(2)} RU` : ""}
+          <div className="flex items-center justify-between border-t border-[#edebe9] bg-[#faf9f8] px-2 py-2 text-xs text-[#605e5c]">
+            <span className="truncate">
+              {hasSearched
+                ? `${items.length} item${items.length === 1 ? "" : "s"}${requestCharge != null ? ` · ${requestCharge.toFixed(2)} RU` : ""}`
+                : "ยังไม่ค้นหา"}
             </span>
-            {hasMore ? (
+            {hasSearched && hasMore ? (
               <Button
                 type="button"
-                variant="outline"
                 size="sm"
-                onClick={loadMore}
+                variant="outline"
+                onClick={loadMoreLiteRows}
                 disabled={loadingMore}
-                className="rounded-sm border-[#8a8886] bg-white"
+                className="h-7 shrink-0 rounded-sm border-[#8a8886] bg-white text-[#323130]"
               >
                 {loadingMore ? <Loader2 className="size-3.5 animate-spin" /> : null}
-                Load more
+                More
               </Button>
-            ) : (
-              <span>End of results</span>
-            )}
+            ) : null}
           </div>
         </section>
 
-        <section className="flex min-h-0 flex-col bg-[#1e1e1e]">
-          <div className="flex items-center justify-between border-b border-[#333] px-3 py-1.5 text-xs text-[#cccccc]">
-            <span>{selectedItem?.id ? `Document · ${selectedItem.id}` : "Document JSON"}</span>
-            <span className="text-[#858585]">read-only</span>
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-[#1e1e1e]">
+          <div className="flex items-center justify-between gap-2 border-b border-[#333] px-3 py-1.5 text-xs text-[#cccccc]">
+            <span className="min-w-0 truncate">
+              {selectedId ? `Page · ${selectedBlobFileName ?? selectedId}` : "Document JSON"}
+            </span>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={!selectedId || fetchingDocument}
+                onClick={() => void handleFetchDocument()}
+                className="h-7 rounded-sm border-[#555] bg-[#2d2d2d] text-[#cccccc] hover:bg-[#3a3a3a] hover:text-white"
+              >
+                {fetchingDocument ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                Fetch
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={!selectedId || downloading}
+                onClick={() => void handleDownload()}
+                className="h-7 rounded-sm border-[#555] bg-[#2d2d2d] text-[#cccccc] hover:bg-[#3a3a3a] hover:text-white"
+              >
+                {downloading ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Download className="size-3.5" />
+                )}
+                Download
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={!selectedId || preparing}
+                onClick={() => void handlePrepare()}
+                className="h-7 rounded-sm bg-[#0078d4] text-white hover:bg-[#106ebe]"
+              >
+                {preparing ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <WandSparkles className="size-3.5" />
+                )}
+                Prepare
+              </Button>
+            </div>
           </div>
-          <div className="min-h-0 flex-1">
-            {selectedItem ? (
-              <JsonViewer value={selectedItem} />
-            ) : (
-              <div className="flex h-full items-center justify-center text-sm text-[#858585]">
-                Select an item to view JSON
+          <div ref={rightSplitRef} className="min-h-0 flex flex-1">
+            <div className="min-h-0 min-w-0 flex-1">
+              {document ? (
+                <JsonViewer value={document} />
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm text-[#858585]">
+                  Select page and click Fetch to view JSON
+                </div>
+              )}
+            </div>
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              className="w-1.5 cursor-col-resize bg-[#2a2a2a] transition-colors hover:bg-[#3b82f6]"
+              onMouseDown={startResizePreparePane}
+            />
+            <div
+              className="min-h-0 shrink-0 border-l border-[#333] bg-[#181818]"
+              style={{ width: `${preparePaneWidth}px` }}
+            >
+              <div className="border-b border-[#333] px-3 py-2 text-xs font-medium text-[#cccccc]">
+                Prepare Result
               </div>
-            )}
+              <div className="h-[calc(100%-33px)] overflow-auto p-3 font-mono text-xs text-[#d4d4d4]">
+                {prepareResult ? (
+                  <pre className="m-0 whitespace-pre-wrap break-all">
+                    {JSON.stringify(prepareResult, null, 2)}
+                  </pre>
+                ) : (
+                  <span className="text-[#858585]">Prepare result will appear here</span>
+                )}
+              </div>
+            </div>
           </div>
         </section>
       </div>
