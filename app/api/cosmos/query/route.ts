@@ -1,7 +1,8 @@
-import { getCosmosContainer, getCosmosMeta } from "@/lib/cosmos"
+import { assertCosmosEnv, getCosmosContainer, getCosmosMeta } from "@/lib/cosmos"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
+export const maxDuration = 60
 
 const FILTER_FIELDS = ["id", "docType", "documentGroup", "unixtime"] as const
 const FILTER_MODES = ["exact", "like"] as const
@@ -71,6 +72,8 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    assertCosmosEnv()
+
     const body = (await request.json()) as QueryBody
     const maxItemCount = Math.min(Math.max(body.maxItemCount ?? 50, 1), 100)
     const querySpec = buildQuery(body)
@@ -93,6 +96,7 @@ export async function POST(request: Request) {
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : "Query failed"
+    console.error("[cosmos/query]", message, error)
     return Response.json({ error: message }, { status: 500 })
   }
 }

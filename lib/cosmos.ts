@@ -3,15 +3,23 @@ import { CosmosClient, type Container, type Database } from "@azure/cosmos"
 let client: CosmosClient | null = null
 
 function requiredEnv(name: string): string {
-  const value = process.env[name]
+  const value = process.env[name]?.trim()
   if (!value) {
     throw new Error(`Missing required environment variable: ${name}`)
   }
   return value
 }
 
+export function assertCosmosEnv() {
+  requiredEnv("COSMOS_ENDPOINT")
+  requiredEnv("COSMOS_KEY")
+  requiredEnv("COSMOS_DATABASE_ID")
+  requiredEnv("COSMOS_CONTAINER_ID")
+}
+
 export function getCosmosClient(): CosmosClient {
   if (!client) {
+    assertCosmosEnv()
     client = new CosmosClient({
       endpoint: requiredEnv("COSMOS_ENDPOINT"),
       key: requiredEnv("COSMOS_KEY"),
