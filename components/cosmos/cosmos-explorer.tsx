@@ -163,6 +163,25 @@ function formatPreparePreview(value: unknown) {
   }
 }
 
+async function readApiPayload<T>(response: Response): Promise<T & { error?: string }> {
+  const text = await response.text()
+  if (!text) return {} as T & { error?: string }
+
+  try {
+    return JSON.parse(text) as T & { error?: string }
+  } catch {
+    const trimmed = text.trim()
+    if (trimmed.startsWith("<!DOCTYPE") || trimmed.startsWith("<html")) {
+      return { error: `Unexpected HTML response (${response.status})` } as T & {
+        error?: string
+      }
+    }
+    return { error: trimmed.slice(0, 300) || `Unexpected response (${response.status})` } as T & {
+      error?: string
+    }
+  }
+}
+
 export function CosmosExplorer() {
   const [field, setField] = useState<FilterField>("unixtime")
   const [mode, setMode] = useState<FilterMode>("like")
@@ -220,10 +239,10 @@ export function CosmosExplorer() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ documentIds }),
       })
-      const data = (await response.json()) as {
+      const data = await readApiPayload<{
         pages?: Record<string, { document: boolean; prepare: boolean; complete: boolean }>
         error?: string
-      }
+      }>(response)
       if (!response.ok) throw new Error(data.error || "Failed to load cache map")
       setPageCacheMap(data.pages ?? {})
     } catch {
@@ -265,7 +284,7 @@ export function CosmosExplorer() {
           }),
         })
 
-        const data = (await response.json()) as QueryResponse
+        const data = await readApiPayload<QueryResponse>(response)
         if (!response.ok) {
           throw new Error(data.error || "Failed to query Cosmos DB")
         }
@@ -313,7 +332,7 @@ export function CosmosExplorer() {
           `/api/cosmos/cache?documentId=${encodeURIComponent(selectedId)}`,
           { cache: "no-store" }
         )
-        const data = (await response.json()) as CacheStatusResponse
+        const data = await readApiPayload<CacheStatusResponse>(response)
         if (cancelled || !response.ok) return
         setDocumentSource(data.document ?? null)
         setPrepareSource(data.prepare ?? null)
@@ -402,7 +421,7 @@ export function CosmosExplorer() {
     const response = await fetch(`/api/cosmos/item/${encodeURIComponent(id)}`, {
       cache: "no-store",
     })
-    const data = (await response.json()) as ItemResponse
+    const data = await readApiPayload<ItemResponse>(response)
     if (!response.ok || !data.item) {
       throw new Error(data.error || "Fetch by id failed")
     }
@@ -464,7 +483,7 @@ export function CosmosExplorer() {
         { cache: "no-store" }
       )
       if (!response.ok) {
-        const data = (await response.json().catch(() => ({}))) as { error?: string }
+        const data = await readApiPayload<{ error?: string }>(response)
         throw new Error(data.error || "PDF download failed")
       }
 
@@ -494,7 +513,7 @@ export function CosmosExplorer() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ documentId: targetId }),
       })
-      const cachedData = (await cachedResponse.json()) as PrepareResult
+      const cachedData = await readApiPayload<PrepareResult>(cachedResponse)
       if (cachedResponse.ok && cachedData.source === "cache") {
         if (selectedId !== targetId) return null
         const preview = formatPreparePreview(cachedData)
@@ -522,7 +541,7 @@ export function CosmosExplorer() {
         docType,
       }),
     })
-    const data = (await response.json()) as PrepareResult
+    const data = await readApiPayload<PrepareResult>(response)
     const preview = formatPreparePreview(data)
     if (!response.ok) {
       startTransition(() => setPreparePreview(preview))
@@ -583,13 +602,13 @@ export function CosmosExplorer() {
           prepareUrl: prepared.url,
         }),
       })
-      const data = (await response.json()) as {
+      const data = await readApiPayload<{
         error?: string
         path?: string
         documentId?: string
         storagePath?: string
         prepareStoragePath?: string
-      }
+      }>(response)
       if (!response.ok) throw new Error(data.error || "Download failed")
 
       setDocumentSource("cache")
@@ -639,7 +658,7 @@ export function CosmosExplorer() {
             : { kind: "all" }
         ),
       })
-      const data = (await response.json()) as { error?: string }
+      const data = await readApiPayload<{ error?: string }>(response)
       if (!response.ok) throw new Error(data.error || "Flush cache failed")
 
       setDocumentSource(null)
@@ -685,7 +704,7 @@ export function CosmosExplorer() {
     }
 
     if (!response.ok) {
-      const data = (await response.json().catch(() => ({}))) as { error?: string }
+      const data = await readApiPayload<{ error?: string }>(response)
       throw new Error(data.error || `Failed to build ${kind} zip`)
     }
 
