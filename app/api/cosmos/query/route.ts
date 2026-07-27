@@ -1,4 +1,4 @@
-import { assertCosmosEnv, getCosmosContainer, getCosmosMeta } from "@/lib/cosmos"
+import { assertCosmosEnv, cosmosSqlQuery, getCosmosMeta } from "@/lib/cosmos"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -34,7 +34,7 @@ function buildQuery(body: QueryBody) {
     : "SELECT * FROM c"
 
   if (!value) {
-    return { query: selectClause }
+    return { query: selectClause, parameters: [] as { name: string; value: string }[] }
   }
 
   if (!isFilterField(body.field) || !isFilterMode(body.mode)) {
@@ -63,6 +63,7 @@ function buildQuery(body: QueryBody) {
 
 export async function GET() {
   try {
+    assertCosmosEnv()
     return Response.json({ ok: true, ...getCosmosMeta() })
   } catch (error) {
     const message = error instanceof Error ? error.message : "Cosmos config error"
@@ -78,25 +79,21 @@ export async function POST(request: Request) {
     const maxItemCount = Math.min(Math.max(body.maxItemCount ?? 50, 1), 100)
     const querySpec = buildQuery(body)
 
-    const container = getCosmosContainer()
-    const iterator = container.items.query(querySpec, {
+    const result = await cosmosSqlQuery(querySpec.query, querySpec.parameters, {
       maxItemCount,
-      continuationToken: body.continuationToken || undefined,
+      continuationToken: body.continuationToken,
     })
 
-    const response = await iterator.fetchNext()
-    const items = (response.resources ?? []) as Record<string, unknown>[]
-
     return Response.json({
-      items,
-      continuationToken: response.continuationToken ?? null,
-      hasMore: Boolean(response.continuationToken),
-      requestCharge: response.requestCharge,
+      items: result.items,
+      continuationToken: result.continuationToken,
+      hasMore: Boolean(result.continuationToken),
+      requestCharge: result.requestCharge,
       ...getCosmosMeta(),
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : "Query failed"
-    console.error("[cosmos/query]", message, error)
+    console.error("[cosmos/query]", message)
     return Response.json({ error: message }, { status: 500 })
   }
 }

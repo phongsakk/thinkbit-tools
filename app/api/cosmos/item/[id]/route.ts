@@ -1,8 +1,9 @@
-import { getCosmosContainer } from "@/lib/cosmos"
+import { cosmosGetDocumentById } from "@/lib/cosmos"
 import { getCachedDocument } from "@/lib/local-cache"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
+export const maxDuration = 60
 
 type RouteContext = {
   params: Promise<{ id: string }>
@@ -28,14 +29,7 @@ export async function GET(request: Request, context: RouteContext) {
       }
     }
 
-    const container = getCosmosContainer()
-    const iterator = container.items.query({
-      query: "SELECT * FROM c WHERE c.id = @id",
-      parameters: [{ name: "@id", value: decodedId }],
-    })
-    const result = await iterator.fetchNext()
-    const item = (result.resources?.[0] ?? null) as Record<string, unknown> | null
-
+    const item = await cosmosGetDocumentById(decodedId)
     if (!item) {
       return Response.json({ error: "Document not found" }, { status: 404 })
     }
@@ -46,6 +40,7 @@ export async function GET(request: Request, context: RouteContext) {
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to fetch item"
+    console.error("[cosmos/item]", message)
     return Response.json({ error: message }, { status: 500 })
   }
 }
