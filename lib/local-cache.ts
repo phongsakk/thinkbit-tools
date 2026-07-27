@@ -24,6 +24,16 @@ export function sanitizeDocumentId(documentId: string) {
 }
 
 function getRootDir(kind: CacheKind) {
+  const configuredRoot = process.env.LOCAL_CACHE_DIR?.trim()
+  if (configuredRoot) {
+    return path.join(configuredRoot, kind)
+  }
+
+  // Vercel serverless runtime is read-only except `/tmp`.
+  if (process.env.VERCEL) {
+    return path.join("/tmp", "thinkbit-tools", "download", kind)
+  }
+
   return path.join(process.cwd(), "download", kind)
 }
 
