@@ -1,0 +1,65 @@
+############################################################
+# Keeps Docker builds fast, lean, and free of local secrets
+############################################################
+
+# Dependencies (installed inside Docker)
+node_modules/
+.pnpm-store/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Next.js build outputs
+.next/
+out/
+dist/
+build/
+.vercel/
+
+# Tests
+coverage/
+__tests__/
+__mocks__/
+*.test.*
+*.spec.*
+
+# Local development / editor
+.git/
+.gitignore
+.gitattributes
+.vscode/
+.idea/
+*.log
+
+# Environment variables (pass at runtime via compose env_file)
+.env
+.env*.local
+.env.development
+.env.test
+.env.production.local
+
+# Docker config (not needed in build context)
+Dockerfile*
+.dockerignore
+compose.yaml
+compose.yml
+docker-compose*.yaml
+docker-compose*.yml
+
+# Docs / CI / tooling
+*.md
+docs/
+.github/
+.cache/
+.eslintcache
+.swc/
+.turbo/
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
+
+# AI / agent metadata
+.cursor/
+AGENTS.md
+.agents/
