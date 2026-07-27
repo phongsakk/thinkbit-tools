@@ -35,6 +35,7 @@ async function createAuthorizationToken(
   resourceId: string,
   date: string
 ) {
+  console.log("[cosmos] createAuthorizationToken", { verb, resourceType, resourceId })
   const key = Buffer.from(requiredEnv("COSMOS_KEY"), "base64")
   const text =
     `${verb.toLowerCase()}\n` +
@@ -82,6 +83,12 @@ async function cosmosFetch(
     date
   )
 
+  console.log("[cosmos] fetch", {
+    verb: verb.toUpperCase(),
+    path,
+    bodyBytes: init?.body?.length ?? 0,
+  })
+
   const response = await fetch(`${getEndpoint()}${path}`, {
     method: verb.toUpperCase(),
     headers: {
@@ -93,6 +100,11 @@ async function cosmosFetch(
     },
     body: init?.body,
     cache: "no-store",
+  })
+
+  console.log("[cosmos] fetch response", {
+    status: response.status,
+    ok: response.ok,
   })
 
   const text = await response.text()

@@ -1,8 +1,12 @@
-import { assertCosmosEnv, cosmosSqlQuery, getCosmosMeta } from "@/lib/cosmos"
-
-export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 export const maxDuration = 60
+
+function log(step: string, extra?: Record<string, unknown>) {
+  console.log(`[cosmos/query] ${step}`, {
+    at: new Date().toISOString(),
+    ...extra,
+  })
+}
 
 const FILTER_FIELDS = ["id", "docType", "documentGroup", "unixtime"] as const
 const FILTER_MODES = ["exact", "like"] as const
@@ -62,26 +66,60 @@ function buildQuery(body: QueryBody) {
 }
 
 export async function GET() {
+  log("GET start")
   try {
+    const { assertCosmosEnv, getCosmosMeta } = await import("@/lib/cosmos")
     assertCosmosEnv()
     return Response.json({ ok: true, ...getCosmosMeta() })
   } catch (error) {
     const message = error instanceof Error ? error.message : "Cosmos config error"
+    console.error("[cosmos/query] GET error", message)
     return Response.json({ ok: false, error: message }, { status: 500 })
   }
 }
 
 export async function POST(request: Request) {
+  log("POST start", {
+    node: process.version,
+    vercel: Boolean(process.env.VERCEL),
+  })
+
   try {
+    log("import cosmos")
+    const { assertCosmosEnv, cosmosSqlQuery, getCosmosMeta } = await import("@/lib/cosmos")
     assertCosmosEnv()
+    log("cosmos ready", {
+      hasEndpoint: Boolean(process.env.COSMOS_ENDPOINT),
+      hasKey: Boolean(process.env.COSMOS_KEY),
+      hasDb: Boolean(process.env.COSMOS_DATABASE_ID),
+      hasContainer: Boolean(process.env.COSMOS_CONTAINER_ID),
+    })
 
     const body = (await request.json()) as QueryBody
+    log("body", {
+      field: body.field,
+      mode: body.mode,
+      valueLen: body.value?.length ?? 0,
+      selectLite: Boolean(body.selectLite),
+      maxItemCount: body.maxItemCount ?? null,
+    })
+
     const maxItemCount = Math.min(Math.max(body.maxItemCount ?? 50, 1), 100)
     const querySpec = buildQuery(body)
+    log("query built", {
+      query: querySpec.query,
+      paramCount: querySpec.parameters.length,
+      maxItemCount,
+    })
 
     const result = await cosmosSqlQuery(querySpec.query, querySpec.parameters, {
       maxItemCount,
       continuationToken: body.continuationToken,
+    })
+    log("query done", {
+      itemCount: result.items.length,
+      hasMore: Boolean(result.continuationToken),
+      requestCharge: result.requestCharge,
     })
 
     return Response.json({
@@ -93,7 +131,16 @@ export async function POST(request: Request) {
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : "Query failed"
-    console.error("[cosmos/query]", message)
-    return Response.json({ error: message }, { status: 500 })
+    const stack = error instanceof Error ? error.stack : undefined
+    console.error("[cosmos/query] POST error", { message, stack })
+    return Response.json(
+      {
+        error: message,
+        where: "cosmos/query",
+        node: process.version,
+        vercel: Boolean(process.env.VERCEL),
+      },
+      { status: 500 }
+    )
   }
 }
