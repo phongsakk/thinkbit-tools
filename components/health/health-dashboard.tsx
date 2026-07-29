@@ -79,7 +79,10 @@ export function HealthDashboard() {
   }, [])
 
   useEffect(() => {
-    void runCheck()
+    const timer = window.setTimeout(() => {
+      void runCheck()
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [runCheck])
 
   return (
