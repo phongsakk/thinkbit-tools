@@ -180,6 +180,23 @@ export async function cosmosSqlQuery<T = Record<string, unknown>>(
   }
 }
 
+/**
+ * Lightweight ping: GET the database resource to verify connectivity + auth.
+ */
+export async function cosmosPing(): Promise<{
+  ok: boolean
+  databaseId: string
+  containerId: string
+  latencyMs: number
+}> {
+  assertCosmosEnv()
+  const databaseId = requiredEnv("COSMOS_DATABASE_ID")
+  const containerId = requiredEnv("COSMOS_CONTAINER_ID")
+  const start = Date.now()
+  await cosmosFetch("GET", "dbs", `dbs/${databaseId}`, `/dbs/${encodeURIComponent(databaseId)}`)
+  return { ok: true, databaseId, containerId, latencyMs: Date.now() - start }
+}
+
 export async function cosmosGetDocumentById<T = Record<string, unknown>>(
   documentId: string
 ): Promise<T | null> {
