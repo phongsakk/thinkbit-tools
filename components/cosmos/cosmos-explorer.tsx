@@ -8,7 +8,7 @@ import {
   useState,
   startTransition,
 } from "react"
-import { ChevronRight, CloudDownload, Columns2, Download, FileDown, FileText, FolderTree, HardDrive, Loader2, Rows2, Trash2, WandSparkles } from "lucide-react"
+import { ChevronRight, CloudDownload, Columns2, Download, FileDown, FileText, FolderTree, HardDrive, History, Loader2, Rows2, Trash2, WandSparkles } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -60,11 +60,61 @@ type AppliedFilter = {
   value: string
 }
 
+type SearchHistoryMap = Record<FilterField, string[]>
+
+const SEARCH_HISTORY_KEY = "cosmos-search-history-v1"
+const MAX_SEARCH_HISTORY = 10
+
+const FILTER_FIELDS: FilterField[] = ["unixtime", "id", "docType", "documentGroup"]
+
+function emptySearchHistory(): SearchHistoryMap {
+  return {
+    unixtime: [],
+    id: [],
+    docType: [],
+    documentGroup: [],
+  }
+}
+
+function loadSearchHistory(): SearchHistoryMap {
+  try {
+    const raw = window.localStorage.getItem(SEARCH_HISTORY_KEY)
+    if (!raw) return emptySearchHistory()
+    const parsed = JSON.parse(raw) as Partial<Record<FilterField, unknown>>
+    const next = emptySearchHistory()
+    for (const field of FILTER_FIELDS) {
+      const values = parsed[field]
+      if (!Array.isArray(values)) continue
+      next[field] = values
+        .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+        .map((item) => item.trim())
+        .slice(0, MAX_SEARCH_HISTORY)
+    }
+    return next
+  } catch {
+    return emptySearchHistory()
+  }
+}
+
+function pushSearchHistory(
+  current: SearchHistoryMap,
+  field: FilterField,
+  value: string
+): SearchHistoryMap {
+  const trimmed = value.trim()
+  if (!trimmed) return current
+  const nextList = [
+    trimmed,
+    ...current[field].filter((item) => item !== trimmed),
+  ].slice(0, MAX_SEARCH_HISTORY)
+  return { ...current, [field]: nextList }
+}
+
 const selectClassName =
-  "h-9 rounded border border-[#8a8886] bg-white px-2 text-sm text-[#323130] outline-none focus:border-[#0078d4] focus:ring-1 focus:ring-[#0078d4]"
+  "h-9 rounded-lg border border-slate-600 bg-slate-900 px-2 text-sm text-slate-100 outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400/40"
 
 const inputClassName =
-  "h-9 min-w-0 flex-1 rounded border border-[#8a8886] bg-white px-3 text-sm text-[#323130] outline-none focus:border-[#0078d4] focus:ring-1 focus:ring-[#0078d4]"
+  "h-9 min-w-0 flex-1 rounded-lg border border-slate-600 bg-slate-900 px-3 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400/40"
 
 type PageNode = {
   id: string
@@ -140,7 +190,7 @@ function JsonViewer({ value }: { value: unknown }) {
   }, [value])
 
   return (
-    <div className="h-full overflow-auto bg-[#1e1e1e] p-3 font-mono text-[13px] leading-5 text-[#d4d4d4]">
+    <div className="h-full overflow-auto bg-slate-950 p-3 font-mono text-[13px] leading-5 text-slate-200">
       <pre className="m-0 whitespace-pre-wrap break-all">{text}</pre>
     </div>
   )
@@ -219,8 +269,14 @@ export function CosmosExplorer() {
   const [hasSearched, setHasSearched] = useState(false)
   const [expandedBatches, setExpandedBatches] = useState<Set<string>>(new Set())
   const [expandedDocs, setExpandedDocs] = useState<Set<string>>(new Set())
+  const [searchHistory, setSearchHistory] = useState<SearchHistoryMap>(emptySearchHistory)
   const rightSplitRef = useRef<HTMLDivElement | null>(null)
   const tree = useMemo(() => (hasSearched ? buildTree(items) : []), [hasSearched, items])
+  const recentForField = searchHistory[field] ?? []
+
+  useEffect(() => {
+    setSearchHistory(loadSearchHistory())
+  }, [])
 
   const allPageIds = useMemo(
     () => tree.flatMap((batch) => batch.docs.flatMap((doc) => doc.pages.map((page) => page.id))),
@@ -351,6 +407,39 @@ export function CosmosExplorer() {
       mode,
       value: value.trim(),
     }
+    if (nextFilter.value) {
+      setSearchHistory((prev) => {
+        const next = pushSearchHistory(prev, nextFilter.field, nextFilter.value)
+        try {
+          window.localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(next))
+        } catch {
+          // ignore quota / private mode
+        }
+        return next
+      })
+    }
+    setHasSearched(true)
+    setAppliedFilter(nextFilter)
+    void fetchItems(nextFilter)
+  }
+
+  function applyRecentSearch(recentValue: string) {
+    if (!recentValue) return
+    setValue(recentValue)
+    const nextFilter: AppliedFilter = {
+      field,
+      mode,
+      value: recentValue.trim(),
+    }
+    setSearchHistory((prev) => {
+      const next = pushSearchHistory(prev, nextFilter.field, nextFilter.value)
+      try {
+        window.localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(next))
+      } catch {
+        // ignore
+      }
+      return next
+    })
     setHasSearched(true)
     setAppliedFilter(nextFilter)
     void fetchItems(nextFilter)
@@ -725,8 +814,8 @@ export function CosmosExplorer() {
   }
 
   return (
-    <div className="flex h-svh flex-col bg-[#f3f2f1] text-[#323130]">
-      <div className="flex flex-wrap items-center gap-2 border-b border-[#edebe9] bg-white px-3 py-2">
+    <div className="flex h-svh flex-col bg-slate-950 text-slate-200">
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 bg-slate-900/90 px-3 py-2.5">
         <select
           value={field}
           onChange={(e) => setField(e.target.value as FilterField)}
@@ -748,6 +837,28 @@ export function CosmosExplorer() {
           <option value="exact">exact</option>
           <option value="like">like</option>
         </select>
+
+        <div className="flex min-w-[180px] items-center gap-1.5">
+          <History className="size-3.5 shrink-0 text-slate-400" />
+          <select
+            value=""
+            onChange={(e) => applyRecentSearch(e.target.value)}
+            className={cn(selectClassName, "min-w-0 flex-1")}
+            aria-label={`Recent ${field} searches`}
+            disabled={recentForField.length === 0}
+          >
+            <option value="">
+              {recentForField.length === 0
+                ? `No recent ${field}`
+                : `Recent ${field} (${recentForField.length})`}
+            </option>
+            {recentForField.map((item) => (
+              <option key={`${field}:${item}`} value={item}>
+                {item}
+              </option>
+            ))}
+          </select>
+        </div>
 
         <input
           type="text"
@@ -773,7 +884,7 @@ export function CosmosExplorer() {
           type="button"
           onClick={applyFilter}
           disabled={loading}
-          className="h-9 rounded-sm bg-[#0078d4] px-4 text-white hover:bg-[#106ebe]"
+          className="h-9 rounded-lg bg-cyan-500 px-4 text-slate-950 hover:bg-cyan-400"
         >
           {loading ? <Loader2 className="size-4 animate-spin" /> : null}
           Apply Filter
@@ -784,18 +895,18 @@ export function CosmosExplorer() {
         className={cn(
           "border-b px-3 py-2 text-sm",
           error
-            ? "border-red-200 bg-red-50 text-red-700"
+            ? "border-red-900/60 bg-red-950/40 text-red-200"
             : actionMessage
-              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-              : "border-[#edebe9] bg-[#faf9f8] text-[#605e5c]"
+              ? "border-emerald-900/50 bg-emerald-950/30 text-emerald-200"
+              : "border-slate-800 bg-slate-900 text-slate-400"
         )}
       >
         {error ?? actionMessage ?? "What you would like to do ?"}
       </div>
 
       <div className="flex min-h-0 flex-1">
-        <section className="flex w-[250px] shrink-0 flex-col border-r border-[#edebe9] bg-white">
-          <div className="flex items-center justify-between border-b border-[#edebe9] bg-[#faf9f8] px-3 py-2 text-xs text-[#605e5c]">
+        <section className="flex w-[270px] shrink-0 flex-col border-r border-slate-800 bg-slate-950">
+          <div className="flex items-center justify-between border-b border-slate-800 bg-slate-900/80 px-3 py-2 text-xs text-slate-400">
             <div className="flex items-center gap-1.5">
               <FolderTree className="size-3.5" />
               <span>Results</span>
@@ -804,16 +915,16 @@ export function CosmosExplorer() {
           </div>
           <div className="min-h-0 flex-1 overflow-auto">
             {!hasSearched ? (
-              <div className="px-3 py-10 text-center text-[#605e5c]">
+              <div className="px-3 py-10 text-center text-slate-500">
                 กรองแล้วกด Apply Filter เพื่อแสดงรายการ
               </div>
             ) : loading ? (
-              <div className="px-3 py-10 text-center text-[#605e5c]">
+              <div className="px-3 py-10 text-center text-slate-500">
                 <Loader2 className="mx-auto mb-2 size-5 animate-spin" />
                 Querying Cosmos DB…
               </div>
             ) : tree.length === 0 ? (
-              <div className="px-3 py-10 text-center text-[#605e5c]">No items found</div>
+              <div className="px-3 py-10 text-center text-slate-500">No items found</div>
             ) : (
               <div className="px-2 py-2 text-sm">
                 {tree.map((batch) => (
@@ -821,7 +932,7 @@ export function CosmosExplorer() {
                     <button
                       type="button"
                       onClick={() => toggleBatch(batch.batchId)}
-                      className="flex w-full items-center gap-1 rounded px-2 py-1 text-left font-semibold text-[#323130] hover:bg-[#f3f2f1]"
+                      className="flex w-full items-center gap-1 rounded-lg px-2 py-1.5 text-left font-semibold text-slate-100 hover:bg-slate-900"
                     >
                       <ChevronRight
                         className={cn("size-3.5 transition-transform", expandedBatches.has(batch.batchId) && "rotate-90")}
@@ -839,7 +950,7 @@ export function CosmosExplorer() {
                               <button
                                 type="button"
                                 onClick={() => toggleDoc(batch.batchId, doc.docId)}
-                                className="flex min-w-0 flex-1 items-center gap-1 rounded px-2 py-1 text-left font-medium text-[#605e5c] hover:bg-[#f3f2f1]"
+                                className="flex min-w-0 flex-1 items-center gap-1 rounded-lg px-2 py-1 text-left font-medium text-slate-300 hover:bg-slate-900"
                               >
                                 <ChevronRight
                                   className={cn("size-3.5 transition-transform", openDoc && "rotate-90")}
@@ -852,7 +963,7 @@ export function CosmosExplorer() {
                                   title="Download available raw/prepared zip"
                                   disabled={zippingDocKey === docKey}
                                   onClick={() => void handleDocZipDownload(batch.batchId, doc)}
-                                  className="mr-1 inline-flex h-6 items-center gap-1 rounded border border-[#8a8886] bg-white px-1.5 text-[11px] text-[#323130] hover:bg-[#f3f2f1] disabled:opacity-60"
+                                  className="mr-1 inline-flex h-6 items-center gap-1 rounded-md border border-slate-600 bg-slate-900 px-1.5 text-[11px] text-slate-200 hover:bg-slate-800 disabled:opacity-60"
                                 >
                                   {zippingDocKey === docKey ? (
                                     <Loader2 className="size-3 animate-spin" />
@@ -869,16 +980,16 @@ export function CosmosExplorer() {
                                   key={page.id}
                                   type="button"
                                   className={cn(
-                                    "ml-5 flex w-[calc(100%-1.25rem)] items-center gap-1 rounded px-2 py-1 text-left text-[#323130] hover:bg-[#deecf9]",
-                                    selectedId === page.id && "bg-[#c7e0f4]"
+                                    "ml-5 flex w-[calc(100%-1.25rem)] items-center gap-1 rounded-lg px-2 py-1 text-left text-slate-200 hover:bg-cyan-500/10",
+                                    selectedId === page.id && "bg-cyan-500/20 text-cyan-100"
                                   )}
                                   onClick={() => selectPage(page)}
                                   title={page.blobFileName}
                                 >
-                                  <FileText className="size-3.5 shrink-0 text-[#605e5c]" />
+                                  <FileText className="size-3.5 shrink-0 text-slate-400" />
                                   <span className="truncate">{page.page}</span>
                                   {pageCacheMap[page.id]?.complete ? (
-                                    <span className="ml-auto rounded bg-emerald-50 px-1 text-[10px] text-emerald-700">
+                                    <span className="ml-auto rounded bg-emerald-950/50 px-1 text-[10px] text-emerald-300">
                                       cached
                                     </span>
                                   ) : null}
@@ -893,7 +1004,7 @@ export function CosmosExplorer() {
             )}
           </div>
 
-          <div className="flex items-center justify-between border-t border-[#edebe9] bg-[#faf9f8] px-2 py-2 text-xs text-[#605e5c]">
+          <div className="flex items-center justify-between border-t border-slate-800 bg-slate-900/80 px-2 py-2 text-xs text-slate-400">
             <span className="truncate">
               {hasSearched
                 ? `${items.length} item${items.length === 1 ? "" : "s"}${requestCharge != null ? ` · ${requestCharge.toFixed(2)} RU` : ""}`
@@ -906,7 +1017,7 @@ export function CosmosExplorer() {
                 variant="outline"
                 onClick={loadMoreLiteRows}
                 disabled={loadingMore}
-                className="h-7 shrink-0 rounded-sm border-[#8a8886] bg-white text-[#323130]"
+                className="h-7 shrink-0 rounded-md border-slate-600 bg-slate-900 text-slate-200 hover:bg-slate-800"
               >
                 {loadingMore ? <Loader2 className="size-3.5 animate-spin" /> : null}
                 More
@@ -915,8 +1026,8 @@ export function CosmosExplorer() {
           </div>
         </section>
 
-        <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-[#1e1e1e]">
-          <div className="flex items-center justify-between gap-2 border-b border-[#333] px-3 py-1.5 text-xs text-[#cccccc]">
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-slate-950">
+          <div className="flex items-center justify-between gap-2 border-b border-slate-800 px-3 py-1.5 text-xs text-slate-300">
             <span className="min-w-0 truncate">
               {selectedId ? `Page · ${selectedBlobFileName ?? selectedId}` : "Document JSON"}
             </span>
@@ -929,7 +1040,7 @@ export function CosmosExplorer() {
                       ? "bg-emerald-900/60 text-emerald-300"
                       : documentSource === "fresh"
                         ? "bg-sky-900/60 text-sky-300"
-                        : "bg-[#2d2d2d] text-[#858585]"
+                        : "bg-slate-800 text-slate-500"
                   )}
                 >
                   Doc: {documentSource ?? "—"}
@@ -941,20 +1052,20 @@ export function CosmosExplorer() {
                       ? "bg-emerald-900/60 text-emerald-300"
                       : prepareSource === "fresh"
                         ? "bg-sky-900/60 text-sky-300"
-                        : "bg-[#2d2d2d] text-[#858585]"
+                        : "bg-slate-800 text-slate-500"
                   )}
                 >
                   Prep: {prepareSource ?? "—"}
                 </span>
               </div>
-              <div className="mr-1 flex overflow-hidden rounded border border-[#555]">
+              <div className="mr-1 flex overflow-hidden rounded-md border border-slate-600">
                 <button
                   type="button"
                   title="ซ้อนแนวนอน"
                   onClick={() => setResultLayout("horizontal")}
                   className={cn(
-                    "inline-flex h-7 items-center justify-center px-2 text-[#cccccc] hover:bg-[#3a3a3a]",
-                    resultLayout === "horizontal" && "bg-[#0078d4] text-white hover:bg-[#106ebe]"
+                    "inline-flex h-7 items-center justify-center px-2 text-slate-300 hover:bg-slate-800",
+                    resultLayout === "horizontal" && "bg-cyan-500 text-slate-950 hover:bg-cyan-400"
                   )}
                 >
                   <Columns2 className="size-3.5" />
@@ -964,8 +1075,8 @@ export function CosmosExplorer() {
                   title="ซ้อนแนวตั้ง"
                   onClick={() => setResultLayout("vertical")}
                   className={cn(
-                    "inline-flex h-7 items-center justify-center border-l border-[#555] px-2 text-[#cccccc] hover:bg-[#3a3a3a]",
-                    resultLayout === "vertical" && "bg-[#0078d4] text-white hover:bg-[#106ebe]"
+                    "inline-flex h-7 items-center justify-center border-l border-slate-600 px-2 text-slate-300 hover:bg-slate-800",
+                    resultLayout === "vertical" && "bg-cyan-500 text-slate-950 hover:bg-cyan-400"
                   )}
                 >
                   <Rows2 className="size-3.5" />
@@ -977,7 +1088,7 @@ export function CosmosExplorer() {
                 variant="outline"
                 disabled={!selectedId || fetchingDocument}
                 onClick={() => void handleFetchDocument()}
-                className="h-7 rounded-sm border-[#555] bg-[#2d2d2d] text-[#cccccc] hover:bg-[#3a3a3a] hover:text-white"
+                className="h-7 rounded-md border-slate-600 bg-slate-900 text-slate-200 hover:bg-slate-800 hover:text-white"
               >
                 {fetchingDocument ? (
                   <Loader2 className="size-3.5 animate-spin" />
@@ -997,7 +1108,7 @@ export function CosmosExplorer() {
                     ? `View PDF: ${selectedBlobFileName}`
                     : "Select a page with blobFileName"
                 }
-                className="h-7 rounded-sm border-[#555] bg-[#2d2d2d] text-[#cccccc] hover:bg-[#3a3a3a] hover:text-white"
+                className="h-7 rounded-md border-slate-600 bg-slate-900 text-slate-200 hover:bg-slate-800 hover:text-white"
               >
                 <FileDown className="size-3.5" />
                 PDF
@@ -1007,7 +1118,7 @@ export function CosmosExplorer() {
                 size="sm"
                 disabled={!selectedId || preparing}
                 onClick={() => void handlePrepare()}
-                className="h-7 rounded-sm bg-[#0078d4] text-white hover:bg-[#106ebe]"
+                className="h-7 rounded-md bg-cyan-500 text-slate-950 hover:bg-cyan-400"
               >
                 {preparing ? (
                   <Loader2 className="size-3.5 animate-spin" />
@@ -1023,7 +1134,7 @@ export function CosmosExplorer() {
                 disabled={!selectedId || downloading || fetchingDocument || preparing}
                 onClick={() => void handleDownload()}
                 title="Fetch + Prepare if needed, then cache to storage"
-                className="h-7 rounded-sm border-[#555] bg-[#2d2d2d] text-[#cccccc] hover:bg-[#3a3a3a] hover:text-white"
+                className="h-7 rounded-md border-slate-600 bg-slate-900 text-slate-200 hover:bg-slate-800 hover:text-white"
               >
                 {downloading ? (
                   <Loader2 className="size-3.5 animate-spin" />
@@ -1038,7 +1149,7 @@ export function CosmosExplorer() {
                 variant="outline"
                 disabled={flushingCache}
                 onClick={() => void handleFlushCache()}
-                className="h-7 rounded-sm border-[#555] bg-[#2d2d2d] text-[#cccccc] hover:bg-[#3a3a3a] hover:text-white"
+                className="h-7 rounded-md border-slate-600 bg-slate-900 text-slate-200 hover:bg-slate-800 hover:text-white"
                 title={selectedId ? `Flush cache for selected page` : "Flush all cache"}
               >
                 {flushingCache ? (
@@ -1061,7 +1172,7 @@ export function CosmosExplorer() {
               {document ? (
                 <JsonViewer value={document} />
               ) : (
-                <div className="flex h-full items-center justify-center text-sm text-[#858585]">
+                <div className="flex h-full items-center justify-center text-sm text-slate-500">
                   Select page and click Fetch to view JSON
                 </div>
               )}
@@ -1070,7 +1181,7 @@ export function CosmosExplorer() {
               role="separator"
               aria-orientation={resultLayout === "horizontal" ? "vertical" : "horizontal"}
               className={cn(
-                "shrink-0 bg-[#2a2a2a] transition-colors hover:bg-[#3b82f6]",
+                "shrink-0 bg-slate-800 transition-colors hover:bg-cyan-500",
                 resultLayout === "horizontal"
                   ? "w-1.5 cursor-col-resize"
                   : "h-1.5 cursor-row-resize"
@@ -1079,21 +1190,21 @@ export function CosmosExplorer() {
             />
             <div
               className={cn(
-                "min-h-0 min-w-0 bg-[#181818]",
-                resultLayout === "horizontal" ? "border-l border-[#333]" : "border-t border-[#333]"
+                "min-h-0 min-w-0 bg-slate-900/80",
+                resultLayout === "horizontal" ? "border-l border-slate-800" : "border-t border-slate-800"
               )}
               style={preparePaneStyle}
             >
-              <div className="border-b border-[#333] px-3 py-2 text-xs font-medium text-[#cccccc]">
+              <div className="border-b border-slate-800 px-3 py-2 text-xs font-medium text-slate-300">
                 Prepare Result
               </div>
-              <div className="h-[calc(100%-33px)] overflow-auto p-3 font-mono text-xs text-[#d4d4d4]">
+              <div className="h-[calc(100%-33px)] overflow-auto p-3 font-mono text-xs text-slate-300">
                 {preparePreview ? (
                   <pre className="m-0 whitespace-pre-wrap break-all">
                     {preparePreview}
                   </pre>
                 ) : (
-                  <span className="text-[#858585]">Prepare result will appear here</span>
+                  <span className="text-slate-500">Prepare result will appear here</span>
                 )}
               </div>
             </div>
