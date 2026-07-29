@@ -6,9 +6,11 @@ import {
   useMemo,
   useRef,
   useState,
-  startTransition,
 } from "react"
+import { useSearchParams } from "next/navigation"
 import { ChevronRight, CloudDownload, Columns2, Download, FileDown, FileText, FolderTree, HardDrive, History, Loader2, Rows2, Trash2, WandSparkles } from "lucide-react"
+import { JsonView, collapseAllNested, darkStyles } from "react-json-view-lite"
+import "react-json-view-lite/dist/index.css"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -47,6 +49,15 @@ type CacheStatusResponse = {
   ok?: boolean
   document?: "cache" | null
   prepare?: "cache" | null
+  blob?: "cache" | null
+  error?: string
+}
+
+type PdfCacheResult = {
+  ok?: boolean
+  source?: "cache" | "fresh"
+  path?: string
+  fileName?: string
   error?: string
 }
 
@@ -180,37 +191,25 @@ function buildTree(items: CosmosItem[]): BatchNode[] {
     }))
 }
 
-function JsonViewer({ value }: { value: unknown }) {
-  const text = useMemo(() => {
-    try {
-      return JSON.stringify(value, null, 2)
-    } catch {
-      return String(value)
-    }
-  }, [value])
-
-  return (
-    <div className="h-full overflow-auto bg-slate-950 p-3 font-mono text-[13px] leading-5 text-slate-200">
-      <pre className="m-0 whitespace-pre-wrap break-all">{text}</pre>
-    </div>
-  )
+function toJsonViewData(value: unknown): object | unknown[] {
+  if (Array.isArray(value)) return value
+  if (value && typeof value === "object") return value as object
+  return { value }
 }
 
-const MAX_PREPARE_PREVIEW_CHARS = 120_000
+function JsonViewer({ value }: { value: unknown }) {
+  const data = useMemo(() => toJsonViewData(value), [value])
 
-function formatPreparePreview(value: unknown) {
-  try {
-    const text = JSON.stringify(value, null, 2)
-    if (text.length <= MAX_PREPARE_PREVIEW_CHARS) {
-      return text
-    }
-    return (
-      text.slice(0, MAX_PREPARE_PREVIEW_CHARS) +
-      `\n\n… truncated (${text.length.toLocaleString()} chars total)`
-    )
-  } catch {
-    return String(value)
-  }
+  return (
+    <div className="h-full overflow-auto bg-slate-950 p-3 text-[13px] leading-5">
+      <JsonView
+        data={data}
+        style={darkStyles}
+        shouldExpandNode={collapseAllNested}
+        clickToExpandNode
+      />
+    </div>
+  )
 }
 
 async function readApiPayload<T>(response: Response): Promise<T & { error?: string }> {
@@ -233,9 +232,11 @@ async function readApiPayload<T>(response: Response): Promise<T & { error?: stri
 }
 
 export function CosmosExplorer() {
+  const searchParams = useSearchParams()
   const [field, setField] = useState<FilterField>("unixtime")
   const [mode, setMode] = useState<FilterMode>("like")
   const [value, setValue] = useState("")
+  const bootstrappedUnixtimeRef = useRef<string | null>(null)
   const [appliedFilter, setAppliedFilter] = useState<AppliedFilter>({
     field: "unixtime",
     mode: "like",
@@ -253,13 +254,17 @@ export function CosmosExplorer() {
   const [downloading, setDownloading] = useState(false)
   const [preparing, setPreparing] = useState(false)
   const [actionMessage, setActionMessage] = useState<string | null>(null)
-  const [preparePreview, setPreparePreview] = useState<string | null>(null)
   const [prepareResult, setPrepareResult] = useState<PrepareResult | null>(null)
   const [documentSource, setDocumentSource] = useState<"cache" | "fresh" | null>(null)
   const [prepareSource, setPrepareSource] = useState<"cache" | "fresh" | null>(null)
+  const [blobSource, setBlobSource] = useState<"cache" | "fresh" | null>(null)
+  const [cachingPdf, setCachingPdf] = useState(false)
   const [flushingCache, setFlushingCache] = useState(false)
   const [pageCacheMap, setPageCacheMap] = useState<
-    Record<string, { document: boolean; prepare: boolean; complete: boolean }>
+    Record<
+      string,
+      { document: boolean; prepare: boolean; blob: boolean; complete: boolean }
+    >
   >({})
   const [zippingDocKey, setZippingDocKey] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -275,7 +280,10 @@ export function CosmosExplorer() {
   const recentForField = searchHistory[field] ?? []
 
   useEffect(() => {
-    setSearchHistory(loadSearchHistory())
+    const timer = window.setTimeout(() => {
+      setSearchHistory(loadSearchHistory())
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [])
 
   const allPageIds = useMemo(
@@ -295,7 +303,10 @@ export function CosmosExplorer() {
         body: JSON.stringify({ documentIds }),
       })
       const data = await readApiPayload<{
-        pages?: Record<string, { document: boolean; prepare: boolean; complete: boolean }>
+        pages?: Record<
+          string,
+          { document: boolean; prepare: boolean; blob: boolean; complete: boolean }
+        >
         error?: string
       }>(response)
       if (!response.ok) throw new Error(data.error || "Failed to load cache map")
@@ -306,7 +317,10 @@ export function CosmosExplorer() {
   }, [])
 
   useEffect(() => {
-    void refreshPageCacheMap(allPageIds)
+    const timer = window.setTimeout(() => {
+      void refreshPageCacheMap(allPageIds)
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [allPageIds, refreshPageCacheMap])
 
   const documentPaneStyle = useMemo(
@@ -372,32 +386,69 @@ export function CosmosExplorer() {
   )
 
   useEffect(() => {
-    setPreparePreview(null)
-    setPrepareResult(null)
-    setDocument(null)
-    setDocumentSource(null)
-    setPrepareSource(null)
+    const unixtime = searchParams.get("unixtime")?.trim()
+    if (!unixtime) return
+    if (bootstrappedUnixtimeRef.current === unixtime) return
+    bootstrappedUnixtimeRef.current = unixtime
 
-    if (!selectedId) return
+    const timer = window.setTimeout(() => {
+      setField("unixtime")
+      setMode("like")
+      setValue(unixtime)
 
-    let cancelled = false
-    void (async () => {
-      try {
-        const response = await fetch(
-          `/api/cosmos/cache?documentId=${encodeURIComponent(selectedId)}`,
-          { cache: "no-store" }
-        )
-        const data = await readApiPayload<CacheStatusResponse>(response)
-        if (cancelled || !response.ok) return
-        setDocumentSource(data.document ?? null)
-        setPrepareSource(data.prepare ?? null)
-      } catch {
-        // ignore status probe errors
+      const nextFilter: AppliedFilter = {
+        field: "unixtime",
+        mode: "like",
+        value: unixtime,
       }
-    })()
+      setSearchHistory((prev) => {
+        const next = pushSearchHistory(prev, nextFilter.field, nextFilter.value)
+        try {
+          window.localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(next))
+        } catch {
+          // ignore
+        }
+        return next
+      })
+      setHasSearched(true)
+      setAppliedFilter(nextFilter)
+      void fetchItems(nextFilter)
+    }, 0)
+
+    return () => window.clearTimeout(timer)
+  }, [searchParams, fetchItems])
+
+  useEffect(() => {
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      setPrepareResult(null)
+      setDocument(null)
+      setDocumentSource(null)
+      setPrepareSource(null)
+      setBlobSource(null)
+
+      if (!selectedId) return
+
+      void (async () => {
+        try {
+          const response = await fetch(
+            `/api/cosmos/cache?documentId=${encodeURIComponent(selectedId)}`,
+            { cache: "no-store" }
+          )
+          const data = await readApiPayload<CacheStatusResponse>(response)
+          if (cancelled || !response.ok) return
+          setDocumentSource(data.document ?? null)
+          setPrepareSource(data.prepare ?? null)
+          setBlobSource(data.blob ?? null)
+        } catch {
+          // ignore status probe errors
+        }
+      })()
+    }, 0)
 
     return () => {
       cancelled = true
+      window.clearTimeout(timer)
     }
   }, [selectedId])
 
@@ -552,20 +603,49 @@ export function CosmosExplorer() {
     }
   }
 
-  function handleViewPdf() {
+  async function handlePdf() {
+    const targetId = selectedId
     const blobFileName =
       selectedBlobFileName ||
       (typeof document?.blobFileName === "string" ? document.blobFileName : null)
+    if (!targetId) return
     if (!blobFileName) {
       setError("No blobFileName for selected page")
       return
     }
+
     setError(null)
     setActionMessage(null)
-    const url = `/api/cosmos/pdf?blobFileName=${encodeURIComponent(blobFileName)}`
-    window.open(url, "_blank", "noopener,noreferrer")
-    const fileName = blobFileName.split("/").pop() || "page.pdf"
-    setActionMessage(`Opened PDF: ${fileName}`)
+
+    const cachedPath = `/download/blob/${encodeURIComponent(targetId)}`
+    if (blobSource === "cache" || pageCacheMap[targetId]?.blob) {
+      window.open(cachedPath, "_blank", "noopener,noreferrer")
+      const fileName = blobFileName.split("/").pop() || "page.pdf"
+      setActionMessage(`Opened PDF: ${fileName}`)
+      return
+    }
+
+    setCachingPdf(true)
+    try {
+      const response = await fetch("/api/cosmos/pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ documentId: targetId, blobFileName }),
+      })
+      const data = await readApiPayload<PdfCacheResult>(response)
+      if (!response.ok) {
+        throw new Error(data.error || "PDF cache failed")
+      }
+      if (selectedId !== targetId) return
+      setBlobSource("cache")
+      await refreshPageCacheMap(allPageIds)
+      const fileName = data.fileName || blobFileName.split("/").pop() || "page.pdf"
+      setActionMessage(`Cached PDF to ${data.path ?? cachedPath}: ${fileName}`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "PDF cache failed")
+    } finally {
+      setCachingPdf(false)
+    }
   }
 
   async function runPrepare(targetId: string) {
@@ -579,8 +659,6 @@ export function CosmosExplorer() {
       const cachedData = await readApiPayload<PrepareResult>(cachedResponse)
       if (cachedResponse.ok && cachedData.source === "cache") {
         if (selectedId !== targetId) return null
-        const preview = formatPreparePreview(cachedData)
-        startTransition(() => setPreparePreview(preview))
         setPrepareResult(cachedData)
         setPrepareSource("cache")
         await refreshPageCacheMap(allPageIds)
@@ -605,14 +683,12 @@ export function CosmosExplorer() {
       }),
     })
     const data = await readApiPayload<PrepareResult>(response)
-    const preview = formatPreparePreview(data)
     if (!response.ok) {
-      startTransition(() => setPreparePreview(preview))
+      setPrepareResult(data)
       throw new Error(data.error || "Prepare failed")
     }
 
     if (selectedId !== targetId) return null
-    startTransition(() => setPreparePreview(preview))
     setPrepareResult(data)
     setPrepareSource(data.source ?? "fresh")
     await refreshPageCacheMap(allPageIds)
@@ -695,7 +771,6 @@ export function CosmosExplorer() {
     setPreparing(true)
     setActionMessage(null)
     setError(null)
-    setPreparePreview(null)
     setPrepareResult(null)
 
     try {
@@ -726,7 +801,7 @@ export function CosmosExplorer() {
 
       setDocumentSource(null)
       setPrepareSource(null)
-      setPreparePreview(null)
+      setBlobSource(null)
       setPrepareResult(null)
       if (selectedId) {
         setDocument(null)
@@ -734,7 +809,7 @@ export function CosmosExplorer() {
       setActionMessage(
         selectedId
           ? `Flushed cache for ${selectedId}`
-          : "Flushed all download/prepare cache"
+          : "Flushed all download/prepare/blob cache"
       )
       await refreshPageCacheMap(allPageIds)
     } catch (err) {
@@ -1101,16 +1176,22 @@ export function CosmosExplorer() {
                 type="button"
                 size="sm"
                 variant="outline"
-                disabled={!selectedBlobFileName}
-                onClick={() => handleViewPdf()}
+                disabled={!selectedId || !selectedBlobFileName || cachingPdf}
+                onClick={() => void handlePdf()}
                 title={
-                  selectedBlobFileName
-                    ? `View PDF: ${selectedBlobFileName}`
-                    : "Select a page with blobFileName"
+                  !selectedBlobFileName
+                    ? "Select a page with blobFileName"
+                    : blobSource === "cache" || pageCacheMap[selectedId ?? ""]?.blob
+                      ? `Open cached PDF: /download/blob/${selectedId}`
+                      : `Download PDF to cache: ${selectedBlobFileName}`
                 }
                 className="h-7 rounded-md border-slate-600 bg-slate-900 text-slate-200 hover:bg-slate-800 hover:text-white"
               >
-                <FileDown className="size-3.5" />
+                {cachingPdf ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <FileDown className="size-3.5" />
+                )}
                 PDF
               </Button>
               <Button
@@ -1195,16 +1276,13 @@ export function CosmosExplorer() {
               )}
               style={preparePaneStyle}
             >
-              <div className="border-b border-slate-800 px-3 py-2 text-xs font-medium text-slate-300">
-                Prepare Result
-              </div>
-              <div className="h-[calc(100%-33px)] overflow-auto p-3 font-mono text-xs text-slate-300">
-                {preparePreview ? (
-                  <pre className="m-0 whitespace-pre-wrap break-all">
-                    {preparePreview}
-                  </pre>
+              <div className="h-full overflow-auto">
+                {prepareResult ? (
+                  <JsonViewer value={prepareResult} />
                 ) : (
-                  <span className="text-slate-500">Prepare result will appear here</span>
+                  <div className="flex h-full items-center justify-center p-3 text-sm text-slate-500">
+                    Result will appear here
+                  </div>
                 )}
               </div>
             </div>

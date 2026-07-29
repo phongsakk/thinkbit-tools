@@ -3,13 +3,15 @@ import path from "node:path"
 
 export type CacheSource = "cache" | "fresh"
 
-export type CacheKind = "cosmos" | "prepare"
+export type CacheKind = "cosmos" | "prepare" | "blob"
 
 export type ManifestEntry = {
   savedAt: string
   fileName: string
   docType?: string
   url?: string
+  blobFileName?: string
+  contentType?: string
 }
 
 export type ManifestFile = {
@@ -41,8 +43,27 @@ function getManifestPath(kind: CacheKind) {
   return path.join(getRootDir(kind), "manifest.json")
 }
 
-function getItemPath(kind: CacheKind, documentId: string) {
-  return path.join(getRootDir(kind), `${sanitizeDocumentId(documentId)}.json`)
+function getItemPath(kind: CacheKind, documentId: string, fileName?: string) {
+  const id = sanitizeDocumentId(documentId)
+  if (kind === "blob") {
+    const resolved = fileName?.trim() || `${id}.pdf`
+    return path.join(getRootDir(kind), path.basename(resolved))
+  }
+  return path.join(getRootDir(kind), `${id}.json`)
+}
+
+function extensionFromFileName(fileName: string) {
+  const ext = path.extname(fileName)
+  return ext || ".pdf"
+}
+
+function contentTypeFromFileName(fileName: string) {
+  const lower = fileName.toLowerCase()
+  if (lower.endsWith(".pdf")) return "application/pdf"
+  if (lower.endsWith(".png")) return "image/png"
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg"
+  if (lower.endsWith(".tif") || lower.endsWith(".tiff")) return "image/tiff"
+  return "application/octet-stream"
 }
 
 async function ensureDir(kind: CacheKind) {
@@ -170,16 +191,85 @@ export async function savePrepareResult(
   }
 }
 
+export async function getCachedBlob(documentId: string) {
+  const id = sanitizeDocumentId(documentId)
+  const manifest = await readManifest("blob")
+  const entry = manifest.entries[id] ?? null
+  const filePath = getItemPath("blob", id, entry?.fileName)
+
+  if (!(await fileExists(filePath))) {
+    return null
+  }
+
+  const buffer = await readFile(filePath)
+  const fileName = entry?.fileName ?? path.basename(filePath)
+  return {
+    buffer,
+    source: "cache" as const,
+    entry,
+    storagePath: filePath,
+    fileName,
+    contentType:
+      entry?.contentType ||
+      contentTypeFromFileName(fileName),
+    path: `/download/blob/${id}`,
+  }
+}
+
+export async function saveBlobFile(
+  documentId: string,
+  buffer: Buffer,
+  meta: { blobFileName: string; contentType?: string; fileName?: string }
+) {
+  const id = sanitizeDocumentId(documentId)
+  await ensureDir("blob")
+
+  const originalName =
+    meta.fileName?.trim() ||
+    meta.blobFileName.split("/").pop()?.trim() ||
+    "page.pdf"
+  const ext = extensionFromFileName(originalName)
+  const fileName = `${id}${ext}`
+  const filePath = getItemPath("blob", id, fileName)
+  await writeFile(filePath, buffer)
+
+  const contentType =
+    meta.contentType && meta.contentType !== "application/octet-stream"
+      ? meta.contentType
+      : contentTypeFromFileName(fileName)
+
+  const manifest = await readManifest("blob")
+  manifest.entries[id] = {
+    savedAt: new Date().toISOString(),
+    fileName,
+    blobFileName: meta.blobFileName,
+    contentType,
+  }
+  await writeManifest("blob", manifest)
+
+  return {
+    documentId: id,
+    fileName,
+    storagePath: filePath,
+    path: `/download/blob/${id}`,
+    entry: manifest.entries[id],
+    contentType,
+  }
+}
+
 export async function getCacheStatus(documentId?: string | null) {
   const cosmosManifest = await readManifest("cosmos")
   const prepareManifest = await readManifest("prepare")
+  const blobManifest = await readManifest("blob")
 
   if (!documentId) {
     return {
       document: null,
       prepare: null,
+      blob: null,
       downloadCount: Object.keys(cosmosManifest.entries).length,
       prepareCount: Object.keys(prepareManifest.entries).length,
+      blobCount: Object.keys(blobManifest.entries).length,
     }
   }
 
@@ -188,23 +278,31 @@ export async function getCacheStatus(documentId?: string | null) {
     Boolean(cosmosManifest.entries[id]) || (await fileExists(getItemPath("cosmos", id)))
   const hasPrepare =
     Boolean(prepareManifest.entries[id]) || (await fileExists(getItemPath("prepare", id)))
+  const blobEntry = blobManifest.entries[id]
+  const hasBlob =
+    Boolean(blobEntry) ||
+    (await fileExists(getItemPath("blob", id, blobEntry?.fileName)))
 
   return {
     document: hasDownload ? ("cache" as const) : null,
     prepare: hasPrepare ? ("cache" as const) : null,
+    blob: hasBlob ? ("cache" as const) : null,
     downloadEntry: cosmosManifest.entries[id] ?? null,
     prepareEntry: prepareManifest.entries[id] ?? null,
+    blobEntry: blobEntry ?? null,
     downloadCount: Object.keys(cosmosManifest.entries).length,
     prepareCount: Object.keys(prepareManifest.entries).length,
+    blobCount: Object.keys(blobManifest.entries).length,
   }
 }
 
 export async function getBatchCacheStatus(documentIds: string[]) {
   const cosmosManifest = await readManifest("cosmos")
   const prepareManifest = await readManifest("prepare")
+  const blobManifest = await readManifest("blob")
   const pages: Record<
     string,
-    { document: boolean; prepare: boolean; complete: boolean }
+    { document: boolean; prepare: boolean; blob: boolean; complete: boolean }
   > = {}
 
   for (const rawId of documentIds) {
@@ -213,9 +311,14 @@ export async function getBatchCacheStatus(documentIds: string[]) {
       Boolean(cosmosManifest.entries[id]) || (await fileExists(getItemPath("cosmos", id)))
     const hasPrepare =
       Boolean(prepareManifest.entries[id]) || (await fileExists(getItemPath("prepare", id)))
+    const blobEntry = blobManifest.entries[id]
+    const hasBlob =
+      Boolean(blobEntry) ||
+      (await fileExists(getItemPath("blob", id, blobEntry?.fileName)))
     pages[id] = {
       document: hasDownload,
       prepare: hasPrepare,
+      blob: hasBlob,
       complete: hasDownload && hasPrepare,
     }
   }
@@ -242,7 +345,7 @@ export async function readCachedPrepareJson(documentId: string) {
 }
 
 export async function flushCache(options?: {
-  kind?: "cosmos" | "prepare" | "download" | "all"
+  kind?: "cosmos" | "prepare" | "blob" | "download" | "all"
   documentId?: string
 }) {
   const requested = options?.kind ?? "all"
@@ -252,21 +355,22 @@ export async function flushCache(options?: {
 
   const kinds: CacheKind[] =
     requested === "all" || requested === "download"
-      ? ["cosmos", "prepare"]
+      ? ["cosmos", "prepare", "blob"]
       : [requested]
 
   const removed: string[] = []
 
   for (const current of kinds) {
     if (documentId) {
-      const itemPath = getItemPath(current, documentId)
+      const manifest = await readManifest(current)
+      const entry = manifest.entries[documentId]
+      const itemPath = getItemPath(current, documentId, entry?.fileName)
       try {
         await rm(itemPath, { force: true })
         removed.push(itemPath)
       } catch {
         // ignore
       }
-      const manifest = await readManifest(current)
       if (manifest.entries[documentId]) {
         delete manifest.entries[documentId]
         await writeManifest(current, manifest)

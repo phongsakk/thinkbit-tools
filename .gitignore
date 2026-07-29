@@ -18,15 +18,21 @@
 # production
 /build
 
-# downloaded cosmos / prepare cache
+# downloaded cosmos / prepare / blob / upload-history cache
 /download/*
 !/download/.gitkeep
 !/download/cosmos/
 !/download/prepare/
+!/download/blob/
+!/download/upload-history/
 /download/cosmos/*
 !/download/cosmos/.gitkeep
 /download/prepare/*
 !/download/prepare/.gitkeep
+/download/blob/*
+!/download/blob/.gitkeep
+/download/upload-history/*
+!/download/upload-history/.gitkeep
 
 # misc
 .DS_Store
