@@ -36,28 +36,34 @@ async function checkCosmos(): Promise<CheckResult> {
 async function checkBlob(): Promise<CheckResult> {
   const start = Date.now()
   try {
-    const { getBlobServiceClient } = await import("@/lib/azure-blob")
-    const client = getBlobServiceClient()
-    const accountName =
-      process.env.AZURE_STORAGE_ACCOUNT_NAME ??
-      client.accountName ??
-      "(unknown)"
+    const hasConnStr = Boolean(process.env.AZURE_STORAGE_CONNECTION_STRING?.trim())
+    if (!hasConnStr) {
+      return {
+        name: "blob",
+        ok: false,
+        latencyMs: Date.now() - start,
+        error: "Missing AZURE_STORAGE_CONNECTION_STRING",
+      }
+    }
 
-    // List up to 1 container to verify connectivity
+    const { BlobServiceClient } = await import("@azure/storage-blob")
+    const client = BlobServiceClient.fromConnectionString(
+      process.env.AZURE_STORAGE_CONNECTION_STRING!.trim()
+    )
+    const accountName =
+      process.env.AZURE_STORAGE_ACCOUNT_NAME ?? client.accountName ?? "(unknown)"
+
     const iter = client.listContainers()
     const page = await iter.byPage({ maxPageSize: 1 }).next()
-    const containers = (
-      page.value?.containerItems ?? []
-    ).map((c: { name: string }) => c.name)
+    const containers = (page.value?.containerItems ?? []).map(
+      (c: { name: string }) => c.name
+    )
 
     return {
       name: "blob",
       ok: true,
       latencyMs: Date.now() - start,
-      details: {
-        accountName,
-        sampleContainers: containers,
-      },
+      details: { accountName, sampleContainers: containers },
     }
   } catch (error) {
     return {
@@ -95,12 +101,27 @@ async function checkLocalCache(): Promise<CheckResult> {
 
 export async function GET() {
   const start = Date.now()
-  const [cosmos, blob, localCache] = await Promise.all([
-    checkCosmos(),
-    checkBlob(),
-    checkLocalCache(),
-  ])
-  const checks = [cosmos, blob, localCache]
+
+  let checks: CheckResult[]
+  try {
+    checks = await Promise.all([
+      checkCosmos(),
+      checkBlob(),
+      checkLocalCache(),
+    ])
+  } catch (error) {
+    return Response.json(
+      {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        where: "health/GET top-level",
+        node: process.version,
+        vercel: Boolean(process.env.VERCEL),
+      },
+      { status: 500 }
+    )
+  }
+
   const allOk = checks.every((c) => c.ok)
 
   return Response.json(
