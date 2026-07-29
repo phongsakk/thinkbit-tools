@@ -1,19 +1,53 @@
+import Link from "next/link"
+import { Activity, Database, ShieldCheck } from "lucide-react"
+
 import { Button } from "@/components/ui/button"
 
 export default function Page() {
   return (
-    <div className="flex min-h-svh p-6">
-      <div className="flex max-w-md min-w-0 flex-col gap-4 text-sm leading-loose">
-        <div>
-          <h1 className="font-medium">Project ready!</h1>
-          <p>You may now add components and start building.</p>
-          <p>We&apos;ve already added the button component for you.</p>
-          <Button className="mt-2">Button</Button>
-        </div>
-        <div className="font-mono text-xs text-muted-foreground">
-          (Press <kbd>d</kbd> to toggle dark mode)
+    <main className="relative min-h-svh overflow-hidden bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 text-slate-100">
+      <div className="pointer-events-none absolute inset-0 opacity-30">
+        <div className="absolute -left-20 top-10 h-72 w-72 rounded-full bg-blue-500/40 blur-3xl" />
+        <div className="absolute -right-20 bottom-10 h-80 w-80 rounded-full bg-cyan-400/30 blur-3xl" />
+      </div>
+
+      <div className="relative mx-auto flex min-h-svh max-w-5xl items-center px-6 py-10">
+        <div className="w-full rounded-2xl border border-white/10 bg-slate-900/60 p-6 shadow-2xl backdrop-blur md:p-8">
+          <p className="mb-3 inline-flex items-center rounded-full border border-cyan-300/30 bg-cyan-400/10 px-3 py-1 text-xs text-cyan-200">
+            Thinkbit Platform
+          </p>
+          <h1 className="text-3xl font-semibold tracking-tight text-white md:text-4xl">
+            Internal Tools Dashboard
+          </h1>
+          <p className="mt-2 max-w-2xl text-sm text-slate-300 md:text-base">
+            Access data explorer and system health checks from one place.
+          </p>
+
+          <div className="mt-6 grid gap-3 md:grid-cols-2">
+            <Link href="/cosmos" className="block">
+              <Button className="h-12 w-full justify-start gap-2 rounded-xl bg-cyan-500 text-slate-950 hover:bg-cyan-400">
+                <Database className="size-4" />
+                Cosmos Explorer
+              </Button>
+            </Link>
+            <Link href="/health" className="block">
+              <Button
+                variant="outline"
+                className="h-12 w-full justify-start gap-2 rounded-xl border-slate-500 bg-slate-800/70 text-slate-100 hover:bg-slate-700"
+              >
+                <ShieldCheck className="size-4" />
+                System Health
+              </Button>
+            </Link>
+          </div>
+
+          <div className="mt-6 flex items-center gap-2 text-xs text-slate-400">
+            <Activity className="size-3.5" />
+            Press <kbd className="rounded border border-slate-600 px-1 py-0.5">d</kbd> to toggle
+            dark mode
+          </div>
         </div>
       </div>
-    </div>
+    </main>
   )
 }

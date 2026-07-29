@@ -1,3 +1,4 @@
+export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
 function log(step: string, extra?: Record<string, unknown>) {

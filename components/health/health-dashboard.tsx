@@ -34,6 +34,12 @@ type HealthResponse = {
   error?: string
 }
 
+type PingResponse = {
+  ok?: boolean
+  service?: string
+  now?: string
+}
+
 const CHECK_ICONS: Record<string, typeof Database> = {
   cosmos: Database,
   blob: HardDrive,
@@ -63,6 +69,23 @@ export function HealthDashboard() {
     setLoading(true)
     setError(null)
     try {
+      const pingText = await fetch("/api/ping", { cache: "no-store" }).then((r) =>
+        r.text()
+      )
+      let pingData: PingResponse | null = null
+      try {
+        pingData = JSON.parse(pingText) as PingResponse
+      } catch {
+        throw new Error(
+          pingText.startsWith("<!DOCTYPE")
+            ? "Ping failed: Unexpected HTML response"
+            : `Ping failed: ${pingText.slice(0, 200)}`
+        )
+      }
+      if (!pingData?.ok) {
+        throw new Error("Ping failed: API not ready")
+      }
+
       const text = await fetch("/api/health", { cache: "no-store" }).then((r) =>
         r.text()
       )
@@ -85,17 +108,28 @@ export function HealthDashboard() {
     return () => window.clearTimeout(timer)
   }, [runCheck])
 
+  const checkedAt = data
+    ? new Date(data.now).toLocaleString("th-TH", {
+        hour12: false,
+      })
+    : null
+
   return (
-    <div className="min-h-screen bg-[#1e1e1e] text-[#cccccc]">
-      <div className="mx-auto max-w-2xl px-4 py-8">
-        <div className="mb-6 flex items-center justify-between">
-          <h1 className="text-xl font-semibold text-white">System Health</h1>
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 text-slate-200">
+      <div className="mx-auto max-w-3xl px-4 py-8">
+        <div className="mb-6 flex items-center justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight text-white">System Health</h1>
+            <p className="mt-1 text-xs text-slate-400">
+              Runtime checks for Cosmos, Blob Storage, and local cache.
+            </p>
+          </div>
           <Button
             size="sm"
             variant="outline"
             disabled={loading}
             onClick={() => void runCheck()}
-            className="h-8 border-[#555] bg-[#2d2d2d] text-[#cccccc] hover:bg-[#3a3a3a] hover:text-white"
+            className="h-9 border-slate-500 bg-slate-800/80 px-3 text-slate-100 hover:bg-slate-700"
           >
             {loading ? (
               <Loader2 className="mr-1.5 size-3.5 animate-spin" />
@@ -107,37 +141,39 @@ export function HealthDashboard() {
         </div>
 
         {error && (
-          <div className="mb-4 rounded border border-red-800 bg-red-950/50 px-4 py-3 text-sm text-red-300">
+          <div className="mb-4 rounded-xl border border-red-700/50 bg-red-950/40 px-4 py-3 text-sm text-red-200">
             {error}
           </div>
         )}
 
         {data && (
           <>
-            {/* Overall banner */}
             <div
               className={cn(
-                "mb-6 flex items-center gap-3 rounded-lg border px-4 py-3",
+                "mb-6 rounded-2xl border p-4 shadow-lg backdrop-blur",
                 data.ok
-                  ? "border-emerald-800 bg-emerald-950/30"
-                  : "border-red-800 bg-red-950/30"
+                  ? "border-emerald-500/40 bg-emerald-950/40"
+                  : "border-red-700/60 bg-red-950/35"
               )}
             >
-              <StatusIcon ok={data.ok} />
-              <div>
-                <div className="font-medium text-white">
-                  {data.ok ? "All systems operational" : "Some checks failed"}
-                </div>
-                <div className="text-xs text-[#999]">
-                  {data.service} · Node {data.node}
-                  {data.vercel ? ` · Vercel ${data.vercelEnv ?? ""} (${data.region ?? "?"})` : " · Self-hosted"}
-                  {" · "}
-                  {data.totalMs}ms total
+              <div className="flex items-start gap-3">
+                <StatusIcon ok={data.ok} />
+                <div>
+                  <div className="text-base font-semibold text-white">
+                    {data.ok ? "All systems operational" : "Some checks failed"}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-300">
+                    {data.service} · Node {data.node}
+                    {data.vercel
+                      ? ` · Vercel ${data.vercelEnv ?? ""} (${data.region ?? "?"})`
+                      : " · Self-hosted"}
+                    {" · "}
+                    {data.totalMs}ms total
+                  </div>
                 </div>
               </div>
             </div>
 
-            {/* Individual checks */}
             <div className="space-y-3">
               {data.checks.map((check) => {
                 const Icon = CHECK_ICONS[check.name] ?? Activity
@@ -146,19 +182,19 @@ export function HealthDashboard() {
                   <div
                     key={check.name}
                     className={cn(
-                      "rounded-lg border px-4 py-3",
+                      "rounded-xl border px-4 py-3 shadow-sm",
                       check.ok
-                        ? "border-[#333] bg-[#252525]"
-                        : "border-red-900 bg-red-950/20"
+                        ? "border-slate-700 bg-slate-900/70"
+                        : "border-red-800/70 bg-red-950/25"
                     )}
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2.5">
-                        <Icon className="size-4 text-[#999]" />
+                        <Icon className="size-4 text-slate-300" />
                         <span className="font-medium text-white">{label}</span>
                       </div>
                       <div className="flex items-center gap-2.5">
-                        <span className="text-xs text-[#888]">
+                        <span className="text-xs text-slate-400">
                           {check.latencyMs}ms
                         </span>
                         <StatusIcon ok={check.ok} />
@@ -166,16 +202,16 @@ export function HealthDashboard() {
                     </div>
 
                     {check.error && (
-                      <div className="mt-2 rounded bg-red-950/40 px-3 py-2 font-mono text-xs text-red-300">
+                      <div className="mt-2 rounded-lg bg-red-950/40 px-3 py-2 font-mono text-xs text-red-300">
                         {check.error}
                       </div>
                     )}
 
                     {check.ok && check.details && (
-                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#888]">
+                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
                         {Object.entries(check.details).map(([key, val]) => (
                           <span key={key}>
-                            <span className="text-[#aaa]">{key}:</span>{" "}
+                            <span className="text-slate-300">{key}:</span>{" "}
                             {typeof val === "object" && val
                               ? JSON.stringify(val)
                               : String(val ?? "—")}
@@ -188,15 +224,15 @@ export function HealthDashboard() {
               })}
             </div>
 
-            <div className="mt-4 text-right text-xs text-[#666]">
-              Last checked: {data.now}
+            <div className="mt-4 text-right text-xs text-slate-500">
+              Last checked: {checkedAt ?? data.now}
             </div>
           </>
         )}
 
         {!data && !error && loading && (
           <div className="flex items-center justify-center py-12">
-            <Loader2 className="size-6 animate-spin text-[#666]" />
+            <Loader2 className="size-6 animate-spin text-slate-500" />
           </div>
         )}
       </div>
