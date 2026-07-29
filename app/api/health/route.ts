@@ -44,7 +44,7 @@ async function checkBlob(): Promise<CheckResult> {
       "(unknown)"
 
     // List up to 1 container to verify connectivity
-    const iter = client.listContainers({ maxPageSize: 1 })
+    const iter = client.listContainers()
     const page = await iter.byPage({ maxPageSize: 1 }).next()
     const containers = (
       page.value?.containerItems ?? []
