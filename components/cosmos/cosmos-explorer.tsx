@@ -201,7 +201,6 @@ export function CosmosExplorer() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [fetchingDocument, setFetchingDocument] = useState(false)
   const [downloading, setDownloading] = useState(false)
-  const [downloadingPdf, setDownloadingPdf] = useState(false)
   const [preparing, setPreparing] = useState(false)
   const [actionMessage, setActionMessage] = useState<string | null>(null)
   const [preparePreview, setPreparePreview] = useState<string | null>(null)
@@ -464,7 +463,7 @@ export function CosmosExplorer() {
     }
   }
 
-  async function handleDownloadPdf() {
+  function handleViewPdf() {
     const blobFileName =
       selectedBlobFileName ||
       (typeof document?.blobFileName === "string" ? document.blobFileName : null)
@@ -472,37 +471,12 @@ export function CosmosExplorer() {
       setError("No blobFileName for selected page")
       return
     }
-
-    setDownloadingPdf(true)
     setError(null)
     setActionMessage(null)
-
-    try {
-      const response = await fetch(
-        `/api/cosmos/pdf?blobFileName=${encodeURIComponent(blobFileName)}`,
-        { cache: "no-store" }
-      )
-      if (!response.ok) {
-        const data = await readApiPayload<{ error?: string }>(response)
-        throw new Error(data.error || "PDF download failed")
-      }
-
-      const blob = await response.blob()
-      const fileName = blobFileName.split("/").pop() || "page.pdf"
-      const objectUrl = URL.createObjectURL(blob)
-      const anchor = window.document.createElement("a")
-      anchor.href = objectUrl
-      anchor.download = fileName
-      window.document.body.appendChild(anchor)
-      anchor.click()
-      anchor.remove()
-      URL.revokeObjectURL(objectUrl)
-      setActionMessage(`Downloaded PDF: ${fileName}`)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "PDF download failed")
-    } finally {
-      setDownloadingPdf(false)
-    }
+    const url = `/api/cosmos/pdf?blobFileName=${encodeURIComponent(blobFileName)}`
+    window.open(url, "_blank", "noopener,noreferrer")
+    const fileName = blobFileName.split("/").pop() || "page.pdf"
+    setActionMessage(`Opened PDF: ${fileName}`)
   }
 
   async function runPrepare(targetId: string) {
@@ -1016,20 +990,16 @@ export function CosmosExplorer() {
                 type="button"
                 size="sm"
                 variant="outline"
-                disabled={!selectedBlobFileName || downloadingPdf}
-                onClick={() => void handleDownloadPdf()}
+                disabled={!selectedBlobFileName}
+                onClick={() => handleViewPdf()}
                 title={
                   selectedBlobFileName
-                    ? `Download PDF from blob: ${selectedBlobFileName}`
+                    ? `View PDF: ${selectedBlobFileName}`
                     : "Select a page with blobFileName"
                 }
                 className="h-7 rounded-sm border-[#555] bg-[#2d2d2d] text-[#cccccc] hover:bg-[#3a3a3a] hover:text-white"
               >
-                {downloadingPdf ? (
-                  <Loader2 className="size-3.5 animate-spin" />
-                ) : (
-                  <FileDown className="size-3.5" />
-                )}
+                <FileDown className="size-3.5" />
                 PDF
               </Button>
               <Button

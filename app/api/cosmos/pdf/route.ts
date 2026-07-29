@@ -23,11 +23,16 @@ export async function GET(request: Request) {
     const { buffer, contentType, fileName } = await downloadBlobByFileName(blobFileName)
 
     const headers = new Headers()
-    headers.set("Content-Type", contentType || contentTypeFromFileName(fileName))
+    const isGenericType =
+      !contentType || contentType === "application/octet-stream"
+    headers.set(
+      "Content-Type",
+      isGenericType ? contentTypeFromFileName(fileName) : contentType
+    )
     headers.set("Content-Length", String(buffer.byteLength))
     headers.set(
       "Content-Disposition",
-      `attachment; filename="${fileName.replace(/"/g, "")}"`
+      `inline; filename="${fileName.replace(/"/g, "")}"`
     )
     headers.set("Cache-Control", "no-store")
 
