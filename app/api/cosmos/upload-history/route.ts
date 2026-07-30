@@ -1,4 +1,4 @@
-import { cosmosSqlQuery } from "@/lib/cosmos"
+import { cosmosSqlQuery, type CosmosQueryResult } from "@/lib/cosmos"
 import {
   buildUploadHistoryCacheKey,
   extractUploadPathMeta,
@@ -102,7 +102,7 @@ async function buildUploadHistory(filters?: UploadHistoryFilters): Promise<{
     (whereParts.length > 0 ? ` WHERE ${whereParts.join(" AND ")}` : "")
 
   do {
-    const result = await cosmosSqlQuery<LiteItem>(
+    const result: CosmosQueryResult<LiteItem> = await cosmosSqlQuery<LiteItem>(
       query,
       parameters,
       {

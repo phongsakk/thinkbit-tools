@@ -59,7 +59,7 @@ type CosmosQueryOptions = {
   continuationToken?: string | null
 }
 
-type CosmosQueryResult<T> = {
+export type CosmosQueryResult<T> = {
   items: T[]
   continuationToken: string | null
   requestCharge: number | null

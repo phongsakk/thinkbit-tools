@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 
+import { cosmosSqlQuery, type CosmosQueryResult as CosmosSqlQueryResult } from "@/lib/cosmos"
 import {
   buildCosmosQueryCacheKey,
   buildCosmosSqlQuery,
@@ -66,7 +67,7 @@ async function writeQueryCache(payload: QueryCachePayload, cacheKey: string) {
 export async function runCosmosQuery(
   input: CosmosQueryInput
 ): Promise<CosmosQueryResult> {
-  const { assertCosmosEnv, cosmosSqlQuery } = await import("@/lib/cosmos")
+  const { assertCosmosEnv } = await import("@/lib/cosmos")
   assertCosmosEnv()
 
   const value = input.value?.trim() ?? ""
@@ -109,11 +110,15 @@ export async function runCosmosQuery(
     const maxPages = 100
 
     do {
-      const page = await cosmosSqlQuery(querySpec.query, querySpec.parameters, {
-        maxItemCount,
-        continuationToken,
-      })
-      items.push(...(page.items as CosmosLiteItem[]))
+      const page: CosmosSqlQueryResult<CosmosLiteItem> = await cosmosSqlQuery<CosmosLiteItem>(
+        querySpec.query,
+        querySpec.parameters,
+        {
+          maxItemCount,
+          continuationToken,
+        }
+      )
+      items.push(...page.items)
       if (typeof page.requestCharge === "number") requestCharge += page.requestCharge
       continuationToken = page.continuationToken
       pages += 1
@@ -154,13 +159,17 @@ export async function runCosmosQuery(
     }
   }
 
-  const result = await cosmosSqlQuery(querySpec.query, querySpec.parameters, {
-    maxItemCount,
-    continuationToken: input.continuationToken,
-  })
+  const result: CosmosSqlQueryResult<CosmosLiteItem> = await cosmosSqlQuery<CosmosLiteItem>(
+    querySpec.query,
+    querySpec.parameters,
+    {
+      maxItemCount,
+      continuationToken: input.continuationToken,
+    }
+  )
 
   return {
-    items: result.items as CosmosLiteItem[],
+    items: result.items,
     continuationToken: result.continuationToken,
     hasMore: Boolean(result.continuationToken),
     requestCharge:

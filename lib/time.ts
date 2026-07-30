@@ -27,7 +27,7 @@ export function appNow(): Dayjs {
 }
 
 export function appDayjs(input?: ConfigType): Dayjs {
-  if (input == null || input === "") return dayjs.invalid()
+  if (input == null || input === "") return dayjs("")
   return dayjs(input).tz(APP_TIMEZONE)
 }
 
