@@ -195,14 +195,18 @@ export async function getCachedBlob(documentId: string) {
   const id = sanitizeDocumentId(documentId)
   const manifest = await readManifest("blob")
   const entry = manifest.entries[id] ?? null
-  const filePath = getItemPath("blob", id, entry?.fileName)
+  // Require an explicit manifest entry — orphan files without manifest are treated as miss.
+  if (!entry?.fileName) {
+    return null
+  }
 
+  const filePath = getItemPath("blob", id, entry.fileName)
   if (!(await fileExists(filePath))) {
     return null
   }
 
   const buffer = await readFile(filePath)
-  const fileName = entry?.fileName ?? path.basename(filePath)
+  const fileName = entry.fileName
   return {
     buffer,
     source: "cache" as const,
@@ -210,7 +214,7 @@ export async function getCachedBlob(documentId: string) {
     storagePath: filePath,
     fileName,
     contentType:
-      entry?.contentType ||
+      entry.contentType ||
       contentTypeFromFileName(fileName),
     path: `/download/blob/${id}`,
   }
@@ -280,8 +284,8 @@ export async function getCacheStatus(documentId?: string | null) {
     Boolean(prepareManifest.entries[id]) || (await fileExists(getItemPath("prepare", id)))
   const blobEntry = blobManifest.entries[id]
   const hasBlob =
-    Boolean(blobEntry) ||
-    (await fileExists(getItemPath("blob", id, blobEntry?.fileName)))
+    Boolean(blobEntry?.fileName) &&
+    (await fileExists(getItemPath("blob", id, blobEntry.fileName)))
 
   return {
     document: hasDownload ? ("cache" as const) : null,
@@ -313,8 +317,8 @@ export async function getBatchCacheStatus(documentIds: string[]) {
       Boolean(prepareManifest.entries[id]) || (await fileExists(getItemPath("prepare", id)))
     const blobEntry = blobManifest.entries[id]
     const hasBlob =
-      Boolean(blobEntry) ||
-      (await fileExists(getItemPath("blob", id, blobEntry?.fileName)))
+      Boolean(blobEntry?.fileName) &&
+      (await fileExists(getItemPath("blob", id, blobEntry.fileName)))
     pages[id] = {
       document: hasDownload,
       prepare: hasPrepare,

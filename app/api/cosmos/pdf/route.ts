@@ -1,4 +1,4 @@
-import { downloadBlobByFileName } from "@/lib/azure-blob"
+import { downloadBlobByFileName, formatUnknownError } from "@/lib/azure-blob"
 import { getCachedBlob, saveBlobFile } from "@/lib/local-cache"
 
 export const runtime = "nodejs"
@@ -61,8 +61,9 @@ export async function POST(request: Request) {
       storagePath: saved.storagePath,
     })
   } catch (error) {
-    const message = error instanceof Error ? error.message : "PDF download failed"
-    const status = /not found/i.test(message) ? 404 : 500
+    const message = formatUnknownError(error, "PDF download failed")
+    console.error("[cosmos/pdf] POST failed", message)
+    const status = /not found|failed \(404\)/i.test(message) ? 404 : 500
     return Response.json({ error: message }, { status })
   }
 }
@@ -92,7 +93,11 @@ export async function GET(request: Request) {
 
     if (!blobFileName) {
       return Response.json(
-        { error: documentId ? "Blob not cached; blobFileName is required" : "blobFileName is required" },
+        {
+          error: documentId
+            ? "Blob not cached; blobFileName is required"
+            : "blobFileName is required",
+        },
         { status: documentId ? 404 : 400 }
       )
     }
@@ -119,8 +124,9 @@ export async function GET(request: Request) {
       headers,
     })
   } catch (error) {
-    const message = error instanceof Error ? error.message : "PDF download failed"
-    const status = /not found/i.test(message) ? 404 : 500
+    const message = formatUnknownError(error, "PDF download failed")
+    console.error("[cosmos/pdf] GET failed", message)
+    const status = /not found|failed \(404\)/i.test(message) ? 404 : 500
     return Response.json({ error: message }, { status })
   }
 }

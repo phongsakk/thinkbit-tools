@@ -616,17 +616,10 @@ export function CosmosExplorer() {
 
     setError(null)
     setActionMessage(null)
-
-    const cachedPath = `/download/blob/${encodeURIComponent(targetId)}`
-    if (blobSource === "cache" || pageCacheMap[targetId]?.blob) {
-      window.open(cachedPath, "_blank", "noopener,noreferrer")
-      const fileName = blobFileName.split("/").pop() || "page.pdf"
-      setActionMessage(`Opened PDF: ${fileName}`)
-      return
-    }
-
     setCachingPdf(true)
+
     try {
+      // Server checks download/blob/manifest.json; downloads + writes if missing.
       const response = await fetch("/api/cosmos/pdf", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -637,10 +630,20 @@ export function CosmosExplorer() {
         throw new Error(data.error || "PDF cache failed")
       }
       if (selectedId !== targetId) return
+
+      const openPath = data.path || `/download/blob/${encodeURIComponent(targetId)}`
+      const fileName = data.fileName || blobFileName.split("/").pop() || "page.pdf"
+
       setBlobSource("cache")
       await refreshPageCacheMap(allPageIds)
-      const fileName = data.fileName || blobFileName.split("/").pop() || "page.pdf"
-      setActionMessage(`Cached PDF to ${data.path ?? cachedPath}: ${fileName}`)
+
+      if (data.source === "cache") {
+        window.open(openPath, "_blank", "noopener,noreferrer")
+        setActionMessage(`Opened cached PDF: ${fileName}`)
+        return
+      }
+
+      setActionMessage(`Downloaded PDF to ${openPath} (manifest updated): ${fileName}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : "PDF cache failed")
     } finally {
@@ -1182,10 +1185,15 @@ export function CosmosExplorer() {
                   !selectedBlobFileName
                     ? "Select a page with blobFileName"
                     : blobSource === "cache" || pageCacheMap[selectedId ?? ""]?.blob
-                      ? `Open cached PDF: /download/blob/${selectedId}`
-                      : `Download PDF to cache: ${selectedBlobFileName}`
+                      ? `Open from download/blob (manifest): ${selectedId}`
+                      : `Download to download/blob + manifest: ${selectedBlobFileName}`
                 }
-                className="h-7 rounded-md border-slate-600 bg-slate-900 text-slate-200 hover:bg-slate-800 hover:text-white"
+                className={cn(
+                  "h-7 rounded-md",
+                  blobSource === "cache" || pageCacheMap[selectedId ?? ""]?.blob
+                    ? "border-cyan-400 bg-cyan-500 text-slate-950 hover:bg-cyan-400 hover:text-slate-950"
+                    : "border-slate-600 bg-slate-900 text-slate-200 hover:bg-slate-800 hover:text-white"
+                )}
               >
                 {cachingPdf ? (
                   <Loader2 className="size-3.5 animate-spin" />

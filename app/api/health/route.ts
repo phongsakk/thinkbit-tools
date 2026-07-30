@@ -48,18 +48,10 @@ async function checkBlob(): Promise<CheckResult> {
       }
     }
 
-    const { BlobServiceClient } = await import("@azure/storage-blob")
-    const client = BlobServiceClient.fromConnectionString(
-      process.env.AZURE_STORAGE_CONNECTION_STRING!.trim()
-    )
+    const { listBlobContainers } = await import("@/lib/azure-blob")
     const accountName =
-      process.env.AZURE_STORAGE_ACCOUNT_NAME ?? client.accountName ?? "(unknown)"
-
-    const iter = client.listContainers()
-    const page = await iter.byPage({ maxPageSize: 1 }).next()
-    const containers = (page.value?.containerItems ?? []).map(
-      (c: { name: string }) => c.name
-    )
+      process.env.AZURE_STORAGE_ACCOUNT_NAME?.trim() || "(unknown)"
+    const containers = await listBlobContainers(50)
 
     return {
       name: "blob",
