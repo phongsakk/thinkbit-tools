@@ -1,9 +1,11 @@
 import { downloadBlobByFileName, formatUnknownError } from "@/lib/azure-blob"
 import {
-  buildBlobCacheFileName,
+  blobCacheMonthYearKey,
   getCachedBlob,
-  getCachedBlobByFileName,
+  getCachedBlobSharingMonthYear,
   linkBlobCacheEntry,
+  parseBlobCacheFileName,
+  parseBlobCacheNameParts,
   saveBlobFile,
 } from "@/lib/local-cache"
 
@@ -40,24 +42,32 @@ export async function POST(request: Request) {
 
     const existing = await getCachedBlob(documentId)
     if (existing) {
-      // Ensure this source path is recorded on the shared cache entry.
-      const linked = await linkBlobCacheEntry(documentId, blobFileName, {
-        fileName: existing.fileName,
-        contentType: existing.contentType,
-      })
-      return Response.json({
-        ok: true,
-        source: "cache",
-        documentId,
-        path: linked.path,
-        fileName: linked.fileName,
-        contentType: linked.contentType,
-        blobFileName: linked.entry.blobFileName,
-      })
+      const incoming = parseBlobCacheNameParts(blobFileName)
+      const cached = parseBlobCacheFileName(existing.fileName)
+      const sameMonthYear =
+        !incoming ||
+        !cached ||
+        blobCacheMonthYearKey(incoming) === blobCacheMonthYearKey(cached)
+
+      if (sameMonthYear) {
+        // Ensure this source path is recorded on the shared cache entry.
+        const linked = await linkBlobCacheEntry(documentId, blobFileName, {
+          fileName: existing.fileName,
+          contentType: existing.contentType,
+        })
+        return Response.json({
+          ok: true,
+          source: "cache",
+          documentId,
+          path: linked.path,
+          fileName: linked.fileName,
+          contentType: linked.contentType,
+          blobFileName: linked.entry.blobFileName,
+        })
+      }
     }
 
-    const cacheFileName = buildBlobCacheFileName(blobFileName)
-    const shared = await getCachedBlobByFileName(cacheFileName)
+    const shared = await getCachedBlobSharingMonthYear(blobFileName)
     if (shared) {
       const linked = await linkBlobCacheEntry(documentId, blobFileName, {
         fileName: shared.fileName,

@@ -11,6 +11,7 @@ type CachedPdfItem = {
   documentId: string
   fileName: string
   blobFileName?: string[]
+  documentIds?: string[]
   contentType?: string
   savedAt: string
   path: string
@@ -142,7 +143,7 @@ export function PdfGallery() {
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {items.map((item) => (
               <article
-                key={item.documentId}
+                key={item.fileName}
                 className={cn(
                   "overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-950/70 shadow-xl",
                   "transition hover:border-cyan-500/40 hover:shadow-cyan-500/5"
