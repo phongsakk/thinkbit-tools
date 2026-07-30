@@ -1,5 +1,11 @@
 import { downloadBlobByFileName, formatUnknownError } from "@/lib/azure-blob"
-import { getCachedBlob, saveBlobFile } from "@/lib/local-cache"
+import {
+  buildBlobCacheFileName,
+  getCachedBlob,
+  getCachedBlobByFileName,
+  linkBlobCacheEntry,
+  saveBlobFile,
+} from "@/lib/local-cache"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -34,13 +40,37 @@ export async function POST(request: Request) {
 
     const existing = await getCachedBlob(documentId)
     if (existing) {
+      // Ensure this source path is recorded on the shared cache entry.
+      const linked = await linkBlobCacheEntry(documentId, blobFileName, {
+        fileName: existing.fileName,
+        contentType: existing.contentType,
+      })
       return Response.json({
         ok: true,
         source: "cache",
         documentId,
-        path: existing.path,
-        fileName: existing.fileName,
-        contentType: existing.contentType,
+        path: linked.path,
+        fileName: linked.fileName,
+        contentType: linked.contentType,
+        blobFileName: linked.entry.blobFileName,
+      })
+    }
+
+    const cacheFileName = buildBlobCacheFileName(blobFileName)
+    const shared = await getCachedBlobByFileName(cacheFileName)
+    if (shared) {
+      const linked = await linkBlobCacheEntry(documentId, blobFileName, {
+        fileName: shared.fileName,
+        contentType: shared.contentType,
+      })
+      return Response.json({
+        ok: true,
+        source: "cache",
+        documentId,
+        path: linked.path,
+        fileName: linked.fileName,
+        contentType: linked.contentType,
+        blobFileName: linked.entry.blobFileName,
       })
     }
 
@@ -48,7 +78,6 @@ export async function POST(request: Request) {
     const saved = await saveBlobFile(documentId, buffer, {
       blobFileName,
       contentType: contentType || contentTypeFromFileName(fileName),
-      fileName,
     })
 
     return Response.json({
@@ -59,6 +88,7 @@ export async function POST(request: Request) {
       fileName: saved.fileName,
       contentType: saved.contentType,
       storagePath: saved.storagePath,
+      blobFileName: saved.entry.blobFileName,
     })
   } catch (error) {
     const message = formatUnknownError(error, "PDF download failed")

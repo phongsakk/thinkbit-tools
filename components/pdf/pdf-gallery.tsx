@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils"
 type CachedPdfItem = {
   documentId: string
   fileName: string
-  blobFileName?: string
+  blobFileName?: string[]
   contentType?: string
   savedAt: string
   path: string

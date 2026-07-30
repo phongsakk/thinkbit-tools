@@ -10,7 +10,8 @@ export type ManifestEntry = {
   fileName: string
   docType?: string
   url?: string
-  blobFileName?: string
+  /** Source Azure blob path(s); array when multiple docs share the same cache fileName. */
+  blobFileName?: string[]
   contentType?: string
 }
 
@@ -64,6 +65,58 @@ function contentTypeFromFileName(fileName: string) {
   if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg"
   if (lower.endsWith(".tif") || lower.endsWith(".tiff")) return "image/tiff"
   return "application/octet-stream"
+}
+
+/**
+ * PDF cache file name: `{factory}-{DOC}-{page}.pdf`
+ * Example:
+ *   .../1783...-H105-00-00000463-DOC0009/.../page006.pdf
+ *   → H105-DOC0009-page006.pdf
+ */
+export function buildBlobCacheFileName(blobFileName: string): string {
+  const normalized = blobFileName.replace(/\\/g, "/").trim()
+  const leaf = normalized.split("/").pop() || "page000.pdf"
+  const pageBase = leaf.replace(/\.pdf$/i, "")
+  const page = /^page\d+$/i.test(pageBase) ? pageBase.toLowerCase() : pageBase
+
+  const afterFirstSlash = normalized.includes("/")
+    ? normalized.slice(normalized.indexOf("/") + 1)
+    : normalized
+  const firstSegment = afterFirstSlash.split("/")[0] ?? ""
+  const match = firstSegment.match(
+    /^(\d+)-(\d{10,})-([A-Za-z0-9]+)-\d{2}-(\d{8})-(DOC\d+)/i
+  )
+  if (match?.[3] && match?.[5]) {
+    return `${match[3]}-${match[5]}-${page}.pdf`
+  }
+
+  const safe = sanitizeDocumentId(page)
+  return `${safe}.pdf`
+}
+
+/** Normalize legacy string | string[] manifest values to a unique string[]. */
+export function normalizeBlobFileNames(
+  value?: string | string[] | null
+): string[] {
+  const list = Array.isArray(value) ? value : value ? [value] : []
+  const unique = new Set<string>()
+  for (const item of list) {
+    const trimmed = String(item).trim()
+    if (trimmed) unique.add(trimmed)
+  }
+  return Array.from(unique)
+}
+
+function mergeBlobFileNames(
+  ...groups: Array<string | string[] | null | undefined>
+): string[] {
+  const unique = new Set<string>()
+  for (const group of groups) {
+    for (const item of normalizeBlobFileNames(group)) {
+      unique.add(item)
+    }
+  }
+  return Array.from(unique)
 }
 
 async function ensureDir(kind: CacheKind) {
@@ -205,12 +258,15 @@ export async function getCachedBlob(documentId: string) {
     return null
   }
 
-  const buffer = await readFile(filePath)
   const fileName = entry.fileName
+  const buffer = await readFile(filePath)
   return {
     buffer,
     source: "cache" as const,
-    entry,
+    entry: {
+      ...entry,
+      blobFileName: normalizeBlobFileNames(entry.blobFileName),
+    },
     storagePath: filePath,
     fileName,
     contentType:
@@ -220,38 +276,86 @@ export async function getCachedBlob(documentId: string) {
   }
 }
 
+/** Find any cached blob that already uses this cache fileName (shared file). */
+export async function getCachedBlobByFileName(fileName: string) {
+  const resolved = path.basename(fileName.trim())
+  if (!resolved) return null
+
+  const manifest = await readManifest("blob")
+  for (const [documentId, entry] of Object.entries(manifest.entries)) {
+    if (!entry?.fileName || entry.fileName !== resolved) continue
+    const filePath = getItemPath("blob", documentId, entry.fileName)
+    if (!(await fileExists(filePath))) continue
+    const buffer = await readFile(filePath)
+    return {
+      documentId,
+      buffer,
+      source: "cache" as const,
+      entry: {
+        ...entry,
+        blobFileName: normalizeBlobFileNames(entry.blobFileName),
+      },
+      storagePath: filePath,
+      fileName: entry.fileName,
+      contentType:
+        entry.contentType || contentTypeFromFileName(entry.fileName),
+      path: `/download/blob/${documentId}`,
+    }
+  }
+  return null
+}
+
 export type CachedBlobListItem = {
   documentId: string
   fileName: string
-  blobFileName?: string
+  blobFileName: string[]
   contentType?: string
   savedAt: string
   path: string
   pageLabel: string
 }
 
-function pageLabelFromBlobFileName(blobFileName?: string, fileName?: string) {
-  const source = blobFileName || fileName || ""
-  const base = source.split("/").pop() || source
-  return base.replace(/\.pdf$/i, "") || "PDF"
+function pageLabelFromBlobFileName(
+  blobFileName?: string | string[],
+  fileName?: string
+) {
+  if (fileName) {
+    return fileName.replace(/\.pdf$/i, "") || "PDF"
+  }
+  const first = normalizeBlobFileNames(blobFileName)[0]
+  if (first) {
+    return buildBlobCacheFileName(first).replace(/\.pdf$/i, "")
+  }
+  return "PDF"
 }
 
 export async function listCachedBlobs(): Promise<CachedBlobListItem[]> {
   const manifest = await readManifest("blob")
   const items: CachedBlobListItem[] = []
+  const seenFiles = new Set<string>()
 
   for (const [documentId, entry] of Object.entries(manifest.entries)) {
     if (!entry?.fileName) continue
     const filePath = getItemPath("blob", documentId, entry.fileName)
     if (!(await fileExists(filePath))) continue
+    // One gallery card per shared cache fileName.
+    if (seenFiles.has(entry.fileName)) continue
+    seenFiles.add(entry.fileName)
+
+    const blobFileNames = mergeBlobFileNames(
+      ...Object.values(manifest.entries)
+        .filter((item) => item?.fileName === entry.fileName)
+        .map((item) => item.blobFileName)
+    )
+
     items.push({
       documentId,
       fileName: entry.fileName,
-      blobFileName: entry.blobFileName,
+      blobFileName: blobFileNames,
       contentType: entry.contentType,
       savedAt: entry.savedAt,
       path: `/download/blob/${documentId}`,
-      pageLabel: pageLabelFromBlobFileName(entry.blobFileName, entry.fileName),
+      pageLabel: pageLabelFromBlobFileName(blobFileNames, entry.fileName),
     })
   }
 
@@ -265,6 +369,60 @@ export async function listCachedBlobs(): Promise<CachedBlobListItem[]> {
   return items
 }
 
+/**
+ * Link a documentId to an existing shared PDF cache file and append blob path.
+ */
+export async function linkBlobCacheEntry(
+  documentId: string,
+  blobFileName: string,
+  shared: { fileName: string; contentType?: string }
+) {
+  const id = sanitizeDocumentId(documentId)
+  await ensureDir("blob")
+  const fileName = path.basename(shared.fileName)
+  const manifest = await readManifest("blob")
+
+  const relatedIds = Object.entries(manifest.entries)
+    .filter(([, entry]) => entry?.fileName === fileName)
+    .map(([entryId]) => entryId)
+
+  const merged = mergeBlobFileNames(
+    ...relatedIds.map((entryId) => manifest.entries[entryId]?.blobFileName),
+    blobFileName
+  )
+
+  const savedAt = new Date().toISOString()
+  const contentType =
+    shared.contentType || contentTypeFromFileName(fileName)
+
+  for (const entryId of new Set([...relatedIds, id])) {
+    manifest.entries[entryId] = {
+      savedAt: entryId === id ? savedAt : manifest.entries[entryId]?.savedAt || savedAt,
+      fileName,
+      blobFileName: merged,
+      contentType: manifest.entries[entryId]?.contentType || contentType,
+    }
+  }
+  // Ensure current doc gets fresh savedAt
+  manifest.entries[id] = {
+    savedAt,
+    fileName,
+    blobFileName: merged,
+    contentType,
+  }
+
+  await writeManifest("blob", manifest)
+  const filePath = getItemPath("blob", id, fileName)
+  return {
+    documentId: id,
+    fileName,
+    storagePath: filePath,
+    path: `/download/blob/${id}`,
+    entry: manifest.entries[id],
+    contentType,
+  }
+}
+
 export async function saveBlobFile(
   documentId: string,
   buffer: Buffer,
@@ -273,12 +431,26 @@ export async function saveBlobFile(
   const id = sanitizeDocumentId(documentId)
   await ensureDir("blob")
 
-  const originalName =
+  const fileName =
     meta.fileName?.trim() ||
-    meta.blobFileName.split("/").pop()?.trim() ||
-    "page.pdf"
-  const ext = extensionFromFileName(originalName)
-  const fileName = `${id}${ext}`
+    buildBlobCacheFileName(meta.blobFileName)
+
+  const manifest = await readManifest("blob")
+  const previous = manifest.entries[id]
+  if (previous?.fileName && previous.fileName !== fileName) {
+    const stillUsed = Object.entries(manifest.entries).some(
+      ([entryId, entry]) =>
+        entryId !== id && entry?.fileName === previous.fileName
+    )
+    if (!stillUsed) {
+      try {
+        await rm(getItemPath("blob", id, previous.fileName), { force: true })
+      } catch {
+        // ignore
+      }
+    }
+  }
+
   const filePath = getItemPath("blob", id, fileName)
   await writeFile(filePath, buffer)
 
@@ -287,13 +459,32 @@ export async function saveBlobFile(
       ? meta.contentType
       : contentTypeFromFileName(fileName)
 
-  const manifest = await readManifest("blob")
+  const relatedIds = Object.entries(manifest.entries)
+    .filter(([, entry]) => entry?.fileName === fileName)
+    .map(([entryId]) => entryId)
+
+  const merged = mergeBlobFileNames(
+    ...relatedIds.map((entryId) => manifest.entries[entryId]?.blobFileName),
+    meta.blobFileName
+  )
+
+  const savedAt = new Date().toISOString()
+  for (const entryId of new Set([...relatedIds, id])) {
+    const existing = manifest.entries[entryId]
+    manifest.entries[entryId] = {
+      savedAt: entryId === id ? savedAt : existing?.savedAt || savedAt,
+      fileName,
+      blobFileName: merged,
+      contentType: existing?.contentType || contentType,
+    }
+  }
   manifest.entries[id] = {
-    savedAt: new Date().toISOString(),
+    savedAt,
     fileName,
-    blobFileName: meta.blobFileName,
+    blobFileName: merged,
     contentType,
   }
+
   await writeManifest("blob", manifest)
 
   return {

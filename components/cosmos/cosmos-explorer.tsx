@@ -8,9 +8,34 @@ import {
   useState,
 } from "react"
 import { useRouter } from "next/navigation"
-import { ChevronRight, CloudDownload, Columns2, Download, FileDown, FileText, FolderTree, HardDrive, History, Loader2, Rows2, Search, Trash2, WandSparkles } from "lucide-react"
-import { JsonView, collapseAllNested, darkStyles } from "react-json-view-lite"
+import { ChevronRight, ChevronsDownUp, ChevronsUpDown, CloudDownload, Columns2, Download, FileDown, FileText, FolderTree, HardDrive, History, Loader2, Rows2, Search, Trash2, WandSparkles } from "lucide-react"
+import { JsonView, allExpanded, collapseAllNested, darkStyles } from "react-json-view-lite"
 import "react-json-view-lite/dist/index.css"
+
+const cosmosJsonStyles: typeof darkStyles = {
+  container: "json-view",
+  basicChildStyle: "json-view-child",
+  childFieldsContainer: "json-view-children",
+  label: "json-view-label",
+  clickableLabel: "json-view-label json-view-label-click",
+  nullValue: "json-view-null",
+  undefinedValue: "json-view-null",
+  stringValue: "json-view-string",
+  numberValue: "json-view-number",
+  booleanValue: "json-view-boolean",
+  otherValue: "json-view-other",
+  punctuation: "json-view-punct",
+  expandIcon: "json-view-expand",
+  collapseIcon: "json-view-collapse",
+  collapsedContent: "json-view-collapsed",
+  noQuotesForStringValues: false,
+  quotesForFieldNames: false,
+  stringifyStringValues: false,
+  ariaLables: {
+    collapseJson: "collapse JSON",
+    expandJson: "expand JSON",
+  },
+}
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -213,15 +238,53 @@ function toJsonViewData(value: unknown): object | unknown[] {
 
 function JsonViewer({ value }: { value: unknown }) {
   const data = useMemo(() => toJsonViewData(value), [value])
+  const [expandAll, setExpandAll] = useState(false)
+  const [expandVersion, setExpandVersion] = useState(0)
+
+  useEffect(() => {
+    setExpandAll(false)
+    setExpandVersion((v) => v + 1)
+  }, [data])
 
   return (
-    <div className="h-full overflow-auto bg-slate-950 p-3 text-[13px] leading-5">
-      <JsonView
-        data={data}
-        style={darkStyles}
-        shouldExpandNode={collapseAllNested}
-        clickToExpandNode
-      />
+    <div className="flex h-full min-h-0 flex-col bg-slate-950">
+      <div className="flex shrink-0 items-center gap-1 border-b border-slate-800 px-2 py-1.5">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => {
+            setExpandAll(true)
+            setExpandVersion((v) => v + 1)
+          }}
+          className="h-7 gap-1.5 rounded-md border-slate-600 bg-slate-900 px-2 text-xs text-slate-200 hover:bg-slate-800 hover:text-white"
+        >
+          <ChevronsUpDown className="size-3.5" />
+          Expand all
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => {
+            setExpandAll(false)
+            setExpandVersion((v) => v + 1)
+          }}
+          className="h-7 gap-1.5 rounded-md border-slate-600 bg-slate-900 px-2 text-xs text-slate-200 hover:bg-slate-800 hover:text-white"
+        >
+          <ChevronsDownUp className="size-3.5" />
+          Collapse all
+        </Button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto p-3 font-mono text-[13px] leading-5">
+        <JsonView
+          key={expandVersion}
+          data={data}
+          style={cosmosJsonStyles}
+          shouldExpandNode={expandAll ? allExpanded : collapseAllNested}
+          clickToExpandNode
+        />
+      </div>
     </div>
   )
 }
@@ -1354,15 +1417,13 @@ export function CosmosExplorer({
               )}
               style={preparePaneStyle}
             >
-              <div className="h-full overflow-auto">
-                {prepareResult ? (
-                  <JsonViewer value={prepareResult} />
-                ) : (
-                  <div className="flex h-full items-center justify-center p-3 text-sm text-slate-500">
-                    Result will appear here
-                  </div>
-                )}
-              </div>
+              {prepareResult ? (
+                <JsonViewer value={prepareResult} />
+              ) : (
+                <div className="flex h-full items-center justify-center p-3 text-sm text-slate-500">
+                  Result will appear here
+                </div>
+              )}
             </div>
           </div>
         </section>

@@ -127,3 +127,78 @@
     @apply font-sans;
     }
 }
+
+/* react-json-view-lite — slate/cyan theme (overrides built-in Solarized) */
+.json-view {
+  background: transparent;
+  color: #cbd5e1;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+.json-view-child {
+  margin: 0;
+  padding: 0 0.65rem;
+}
+.json-view-children {
+  margin: 0;
+  padding: 0;
+}
+.json-view-label {
+  margin-right: 0.35rem;
+  font-weight: 600;
+  color: #94a3b8;
+}
+.json-view-label-click {
+  cursor: pointer;
+}
+.json-view-label-click:hover {
+  color: #e2e8f0;
+}
+.json-view-punct {
+  margin-right: 0.25rem;
+  font-weight: 600;
+  color: #64748b;
+}
+.json-view-string {
+  color: #67e8f9;
+}
+.json-view-number {
+  color: #fbbf24;
+}
+.json-view-boolean {
+  color: #c4b5fd;
+}
+.json-view-null {
+  color: #f87171;
+}
+.json-view-other {
+  color: #e2e8f0;
+}
+.json-view-expand,
+.json-view-collapse {
+  margin-right: 0.35rem;
+  cursor: pointer;
+  user-select: none;
+  font-size: 1.05em;
+  color: #64748b;
+}
+.json-view-expand:hover,
+.json-view-collapse:hover {
+  color: #94a3b8;
+}
+.json-view-expand::after {
+  content: "\25B8";
+}
+.json-view-collapse::after {
+  content: "\25BE";
+}
+.json-view-collapsed {
+  margin-right: 0.35rem;
+  cursor: pointer;
+  color: #64748b;
+}
+.json-view-collapsed::after {
+  content: "...";
+  font-size: 0.85em;
+}
