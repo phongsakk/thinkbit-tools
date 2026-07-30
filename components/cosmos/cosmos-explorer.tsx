@@ -387,19 +387,23 @@ export function CosmosExplorer() {
 
   useEffect(() => {
     const unixtime = searchParams.get("unixtime")?.trim()
-    if (!unixtime) return
-    if (bootstrappedUnixtimeRef.current === unixtime) return
-    bootstrappedUnixtimeRef.current = unixtime
+    const id = searchParams.get("id")?.trim()
+    const bootstrapValue = unixtime || id
+    const bootstrapField: FilterField = unixtime ? "unixtime" : "id"
+    const bootstrapMode: FilterMode = unixtime ? "like" : "exact"
+    if (!bootstrapValue) return
+    if (bootstrappedUnixtimeRef.current === `${bootstrapField}:${bootstrapValue}`) return
+    bootstrappedUnixtimeRef.current = `${bootstrapField}:${bootstrapValue}`
 
     const timer = window.setTimeout(() => {
-      setField("unixtime")
-      setMode("like")
-      setValue(unixtime)
+      setField(bootstrapField)
+      setMode(bootstrapMode)
+      setValue(bootstrapValue)
 
       const nextFilter: AppliedFilter = {
-        field: "unixtime",
-        mode: "like",
-        value: unixtime,
+        field: bootstrapField,
+        mode: bootstrapMode,
+        value: bootstrapValue,
       }
       setSearchHistory((prev) => {
         const next = pushSearchHistory(prev, nextFilter.field, nextFilter.value)

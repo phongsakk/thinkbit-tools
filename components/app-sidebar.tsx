@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { Database, Home, Upload } from "lucide-react"
+import { Database, FileText, Home, Upload } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { href: "/", label: "Home", icon: Home },
   { href: "/cosmos", label: "Cosmos Explorer", icon: Database },
   { href: "/upload-history", label: "Upload History", icon: Upload },
+  { href: "/pdf", label: "PDF Cache", icon: FileText },
 ] as const
 
 export function AppSidebar() {

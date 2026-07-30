@@ -1,8 +1,29 @@
 import Link from "next/link"
-import { Database } from "lucide-react"
+import { Database, FileText, Upload } from "lucide-react"
 
 import { HealthSummary } from "@/components/health/health-summary"
 import { Button } from "@/components/ui/button"
+
+const TOOL_LINKS = [
+  {
+    href: "/cosmos",
+    label: "Open Cosmos Explorer",
+    icon: Database,
+    primary: true,
+  },
+  {
+    href: "/upload-history",
+    label: "Upload History",
+    icon: Upload,
+    primary: false,
+  },
+  {
+    href: "/pdf",
+    label: "PDF Cache",
+    icon: FileText,
+    primary: false,
+  },
+] as const
 
 export default function Page() {
   return (
@@ -22,16 +43,28 @@ export default function Page() {
               Internal Tools Dashboard
             </h1>
             <p className="mt-2 max-w-2xl text-sm text-slate-300 md:text-base">
-              Browse Cosmos documents and monitor system connectivity from one place.
+              Browse Cosmos documents, upload history, and cached PDFs from one place.
             </p>
 
-            <div className="mt-6">
-              <Link href="/cosmos" className="block max-w-md">
-                <Button className="h-12 w-full justify-start gap-2 rounded-xl bg-cyan-500 text-slate-950 hover:bg-cyan-400">
-                  <Database className="size-4" />
-                  Open Cosmos Explorer
-                </Button>
-              </Link>
+            <div className="mt-6 grid gap-2 sm:grid-cols-3">
+              {TOOL_LINKS.map((item) => {
+                const Icon = item.icon
+                return (
+                  <Link key={item.href} href={item.href} className="block">
+                    <Button
+                      className={
+                        item.primary
+                          ? "h-12 w-full justify-start gap-2 rounded-xl bg-cyan-500 text-slate-950 hover:bg-cyan-400"
+                          : "h-12 w-full justify-start gap-2 rounded-xl border border-slate-600 bg-slate-800/80 text-slate-100 hover:bg-slate-700"
+                      }
+                      variant={item.primary ? "default" : "outline"}
+                    >
+                      <Icon className="size-4" />
+                      {item.label}
+                    </Button>
+                  </Link>
+                )
+              })}
             </div>
           </div>
 

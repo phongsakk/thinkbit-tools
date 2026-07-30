@@ -220,6 +220,51 @@ export async function getCachedBlob(documentId: string) {
   }
 }
 
+export type CachedBlobListItem = {
+  documentId: string
+  fileName: string
+  blobFileName?: string
+  contentType?: string
+  savedAt: string
+  path: string
+  pageLabel: string
+}
+
+function pageLabelFromBlobFileName(blobFileName?: string, fileName?: string) {
+  const source = blobFileName || fileName || ""
+  const base = source.split("/").pop() || source
+  return base.replace(/\.pdf$/i, "") || "PDF"
+}
+
+export async function listCachedBlobs(): Promise<CachedBlobListItem[]> {
+  const manifest = await readManifest("blob")
+  const items: CachedBlobListItem[] = []
+
+  for (const [documentId, entry] of Object.entries(manifest.entries)) {
+    if (!entry?.fileName) continue
+    const filePath = getItemPath("blob", documentId, entry.fileName)
+    if (!(await fileExists(filePath))) continue
+    items.push({
+      documentId,
+      fileName: entry.fileName,
+      blobFileName: entry.blobFileName,
+      contentType: entry.contentType,
+      savedAt: entry.savedAt,
+      path: `/download/blob/${documentId}`,
+      pageLabel: pageLabelFromBlobFileName(entry.blobFileName, entry.fileName),
+    })
+  }
+
+  items.sort((a, b) => {
+    const at = Date.parse(a.savedAt)
+    const bt = Date.parse(b.savedAt)
+    if (Number.isFinite(at) && Number.isFinite(bt)) return bt - at
+    return b.documentId.localeCompare(a.documentId)
+  })
+
+  return items
+}
+
 export async function saveBlobFile(
   documentId: string,
   buffer: Buffer,
