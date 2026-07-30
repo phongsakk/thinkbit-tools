@@ -7,15 +7,22 @@ import {
   useRef,
   useState,
 } from "react"
-import { useSearchParams } from "next/navigation"
-import { ChevronRight, CloudDownload, Columns2, Download, FileDown, FileText, FolderTree, HardDrive, History, Loader2, Rows2, Trash2, WandSparkles } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { ChevronRight, CloudDownload, Columns2, Download, FileDown, FileText, FolderTree, HardDrive, History, Loader2, Rows2, Search, Trash2, WandSparkles } from "lucide-react"
 import { JsonView, collapseAllNested, darkStyles } from "react-json-view-lite"
 import "react-json-view-lite/dist/index.css"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import {
+  buildCosmosSearchHref,
+  type CosmosFilterField,
+  type CosmosFilterMode,
+  type CosmosLiteItem,
+  type CosmosQueryResult,
+} from "@/lib/cosmos-query-shared"
 
-type CosmosItem = Record<string, unknown> & {
+type CosmosItem = CosmosLiteItem & {
   id?: string
   blobFileName?: string
   docType?: string
@@ -25,7 +32,8 @@ type QueryResponse = {
   items: CosmosItem[]
   continuationToken: string | null
   hasMore: boolean
-  requestCharge?: number
+  requestCharge?: number | null
+  source?: "cache" | "fresh"
   error?: string
 }
 
@@ -61,14 +69,20 @@ type PdfCacheResult = {
   error?: string
 }
 
-type FilterField = "id" | "docType" | "documentGroup" | "unixtime"
-type FilterMode = "exact" | "like"
+type FilterField = CosmosFilterField
+type FilterMode = CosmosFilterMode
 type ResultLayout = "horizontal" | "vertical"
 
 type AppliedFilter = {
   field: FilterField
   mode: FilterMode
   value: string
+}
+
+export type CosmosExplorerProps = {
+  initialFilter?: AppliedFilter | null
+  initialData?: CosmosQueryResult | null
+  initialError?: string | null
 }
 
 type SearchHistoryMap = Record<FilterField, string[]>
@@ -231,20 +245,30 @@ async function readApiPayload<T>(response: Response): Promise<T & { error?: stri
   }
 }
 
-export function CosmosExplorer() {
-  const searchParams = useSearchParams()
-  const [field, setField] = useState<FilterField>("unixtime")
-  const [mode, setMode] = useState<FilterMode>("like")
-  const [value, setValue] = useState("")
-  const bootstrappedUnixtimeRef = useRef<string | null>(null)
-  const [appliedFilter, setAppliedFilter] = useState<AppliedFilter>({
-    field: "unixtime",
-    mode: "like",
-    value: "",
-  })
-  const [items, setItems] = useState<CosmosItem[]>([])
-  const [continuationToken, setContinuationToken] = useState<string | null>(null)
-  const [hasMore, setHasMore] = useState(false)
+export function CosmosExplorer({
+  initialFilter = null,
+  initialData = null,
+  initialError = null,
+}: CosmosExplorerProps) {
+  const router = useRouter()
+  const [field, setField] = useState<FilterField>(initialFilter?.field ?? "unixtime")
+  const [mode, setMode] = useState<FilterMode>(initialFilter?.mode ?? "like")
+  const [value, setValue] = useState(initialFilter?.value ?? "")
+  const lastInitialKeyRef = useRef(
+    initialFilter ? `${initialFilter.field}:${initialFilter.mode}:${initialFilter.value}` : ""
+  )
+  const [appliedFilter, setAppliedFilter] = useState<AppliedFilter>(
+    initialFilter ?? {
+      field: "unixtime",
+      mode: "like",
+      value: "",
+    }
+  )
+  const [currentData, setCurrentData] = useState<CosmosItem[]>(initialData?.items ?? [])
+  const [continuationToken, setContinuationToken] = useState<string | null>(
+    initialData?.continuationToken ?? null
+  )
+  const [hasMore, setHasMore] = useState(Boolean(initialData?.hasMore))
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [selectedBlobFileName, setSelectedBlobFileName] = useState<string | null>(null)
   const [document, setDocument] = useState<CosmosItem | null>(null)
@@ -253,7 +277,13 @@ export function CosmosExplorer() {
   const [fetchingDocument, setFetchingDocument] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [preparing, setPreparing] = useState(false)
-  const [actionMessage, setActionMessage] = useState<string | null>(null)
+  const [actionMessage, setActionMessage] = useState<string | null>(
+    initialData
+      ? initialData.source === "cache"
+        ? `Loaded from query cache · ${initialData.items.length} items`
+        : `Loaded · ${initialData.items.length} items`
+      : null
+  )
   const [prepareResult, setPrepareResult] = useState<PrepareResult | null>(null)
   const [documentSource, setDocumentSource] = useState<"cache" | "fresh" | null>(null)
   const [prepareSource, setPrepareSource] = useState<"cache" | "fresh" | null>(null)
@@ -267,23 +297,82 @@ export function CosmosExplorer() {
     >
   >({})
   const [zippingDocKey, setZippingDocKey] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [requestCharge, setRequestCharge] = useState<number | null>(null)
+  const [error, setError] = useState<string | null>(initialError)
+  const [requestCharge, setRequestCharge] = useState<number | null>(
+    initialData?.requestCharge ?? null
+  )
   const [resultSplitRatio, setResultSplitRatio] = useState(0.5)
   const [resultLayout, setResultLayout] = useState<ResultLayout>("horizontal")
-  const [hasSearched, setHasSearched] = useState(false)
+  const [hasSearched, setHasSearched] = useState(Boolean(initialFilter?.value))
   const [expandedBatches, setExpandedBatches] = useState<Set<string>>(new Set())
   const [expandedDocs, setExpandedDocs] = useState<Set<string>>(new Set())
   const [searchHistory, setSearchHistory] = useState<SearchHistoryMap>(emptySearchHistory)
   const rightSplitRef = useRef<HTMLDivElement | null>(null)
-  const tree = useMemo(() => (hasSearched ? buildTree(items) : []), [hasSearched, items])
+  const tree = useMemo(
+    () => (hasSearched ? buildTree(currentData) : []),
+    [hasSearched, currentData]
+  )
   const recentForField = searchHistory[field] ?? []
 
   useEffect(() => {
+    const nextKey = initialFilter
+      ? `${initialFilter.field}:${initialFilter.mode}:${initialFilter.value}`
+      : ""
+    if (nextKey === lastInitialKeyRef.current) return
+    lastInitialKeyRef.current = nextKey
+
+    if (!initialFilter) {
+      setHasSearched(false)
+      setCurrentData([])
+      setContinuationToken(null)
+      setHasMore(false)
+      setRequestCharge(null)
+      setError(initialError)
+      return
+    }
+
+    setField(initialFilter.field)
+    setMode(initialFilter.mode)
+    setValue(initialFilter.value)
+    setAppliedFilter(initialFilter)
+    setHasSearched(true)
+    setCurrentData(initialData?.items ?? [])
+    setContinuationToken(initialData?.continuationToken ?? null)
+    setHasMore(Boolean(initialData?.hasMore))
+    setRequestCharge(initialData?.requestCharge ?? null)
+    setError(initialError)
+    setSelectedId(null)
+    setSelectedBlobFileName(null)
+    setDocument(null)
+    setExpandedBatches(new Set())
+    setExpandedDocs(new Set())
+    setActionMessage(
+      initialData
+        ? initialData.source === "cache"
+          ? `Loaded from query cache · ${initialData.items.length} items`
+          : `Loaded · ${initialData.items.length} items`
+        : null
+    )
+  }, [initialFilter, initialData, initialError])
+
+  useEffect(() => {
     const timer = window.setTimeout(() => {
-      setSearchHistory(loadSearchHistory())
+      const loaded = loadSearchHistory()
+      if (!initialFilter?.value) {
+        setSearchHistory(loaded)
+        return
+      }
+      const next = pushSearchHistory(loaded, initialFilter.field, initialFilter.value)
+      try {
+        window.localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(next))
+      } catch {
+        // ignore
+      }
+      setSearchHistory(next)
     }, 0)
     return () => window.clearTimeout(timer)
+    // Intentionally only hydrate history once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const allPageIds = useMemo(
@@ -333,7 +422,7 @@ export function CosmosExplorer() {
     [resultSplitRatio]
   )
   const fetchItems = useCallback(
-    async (filter: AppliedFilter, options?: { append?: boolean }) => {
+    async (filter: AppliedFilter, options?: { append?: boolean; forceFresh?: boolean }) => {
       const append = Boolean(options?.append)
       if (append) setLoadingMore(true)
       else setLoading(true)
@@ -348,7 +437,9 @@ export function CosmosExplorer() {
             mode: filter.mode,
             value: filter.value,
             selectLite: true,
-            maxItemCount: 120,
+            maxItemCount: 100,
+            fetchAll: !append && Boolean(filter.value.trim()),
+            forceFresh: Boolean(options?.forceFresh),
             continuationToken: append ? continuationToken : null,
           }),
         })
@@ -358,25 +449,34 @@ export function CosmosExplorer() {
           throw new Error(data.error || "Failed to query Cosmos DB")
         }
 
-        setItems((prev) => (append ? [...prev, ...data.items] : data.items))
+        const newData = data.items
+        setCurrentData((prev) => (append ? [...prev, ...newData] : newData))
         setContinuationToken(data.continuationToken)
         setHasMore(Boolean(data.continuationToken))
-        setRequestCharge((prev) => (append ? (prev ?? 0) + (data.requestCharge ?? 0) : (data.requestCharge ?? 0)))
-
+        setRequestCharge((prev) =>
+          append ? (prev ?? 0) + (data.requestCharge ?? 0) : (data.requestCharge ?? 0)
+        )
         if (!append) {
+          setActionMessage(
+            data.source === "cache"
+              ? `Loaded from query cache · ${newData.length} items`
+              : `Loaded · ${newData.length} items`
+          )
           setSelectedId(null)
           setSelectedBlobFileName(null)
           setDocument(null)
           setExpandedBatches(new Set())
           setExpandedDocs(new Set())
         }
+        return newData
       } catch (err) {
         setError(err instanceof Error ? err.message : "Query failed")
         if (!append) {
-          setItems([])
+          setCurrentData([])
           setContinuationToken(null)
           setHasMore(false)
         }
+        return []
       } finally {
         setLoading(false)
         setLoadingMore(false)
@@ -384,43 +484,6 @@ export function CosmosExplorer() {
     },
     [continuationToken]
   )
-
-  useEffect(() => {
-    const unixtime = searchParams.get("unixtime")?.trim()
-    const id = searchParams.get("id")?.trim()
-    const bootstrapValue = unixtime || id
-    const bootstrapField: FilterField = unixtime ? "unixtime" : "id"
-    const bootstrapMode: FilterMode = unixtime ? "like" : "exact"
-    if (!bootstrapValue) return
-    if (bootstrappedUnixtimeRef.current === `${bootstrapField}:${bootstrapValue}`) return
-    bootstrappedUnixtimeRef.current = `${bootstrapField}:${bootstrapValue}`
-
-    const timer = window.setTimeout(() => {
-      setField(bootstrapField)
-      setMode(bootstrapMode)
-      setValue(bootstrapValue)
-
-      const nextFilter: AppliedFilter = {
-        field: bootstrapField,
-        mode: bootstrapMode,
-        value: bootstrapValue,
-      }
-      setSearchHistory((prev) => {
-        const next = pushSearchHistory(prev, nextFilter.field, nextFilter.value)
-        try {
-          window.localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(next))
-        } catch {
-          // ignore
-        }
-        return next
-      })
-      setHasSearched(true)
-      setAppliedFilter(nextFilter)
-      void fetchItems(nextFilter)
-    }, 0)
-
-    return () => window.clearTimeout(timer)
-  }, [searchParams, fetchItems])
 
   useEffect(() => {
     let cancelled = false
@@ -456,48 +519,47 @@ export function CosmosExplorer() {
     }
   }, [selectedId])
 
-  function applyFilter() {
-    const nextFilter: AppliedFilter = {
-      field,
-      mode,
-      value: value.trim(),
-    }
-    if (nextFilter.value) {
-      setSearchHistory((prev) => {
-        const next = pushSearchHistory(prev, nextFilter.field, nextFilter.value)
-        try {
-          window.localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(next))
-        } catch {
-          // ignore quota / private mode
-        }
-        return next
-      })
-    }
-    setHasSearched(true)
-    setAppliedFilter(nextFilter)
-    void fetchItems(nextFilter)
-  }
-
-  function applyRecentSearch(recentValue: string) {
-    if (!recentValue) return
-    setValue(recentValue)
-    const nextFilter: AppliedFilter = {
-      field,
-      mode,
-      value: recentValue.trim(),
-    }
+  function rememberSearch(nextFilter: AppliedFilter) {
+    if (!nextFilter.value) return
     setSearchHistory((prev) => {
       const next = pushSearchHistory(prev, nextFilter.field, nextFilter.value)
       try {
         window.localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(next))
       } catch {
-        // ignore
+        // ignore quota / private mode
       }
       return next
     })
+  }
+
+  async function runSearch(nextFilter: AppliedFilter) {
+    rememberSearch(nextFilter)
     setHasSearched(true)
     setAppliedFilter(nextFilter)
-    void fetchItems(nextFilter)
+    const href = buildCosmosSearchHref(nextFilter)
+    lastInitialKeyRef.current = nextFilter.value
+      ? `${nextFilter.field}:${nextFilter.mode}:${nextFilter.value}`
+      : ""
+    router.replace(href, { scroll: false })
+    await fetchItems(nextFilter)
+  }
+
+  function applyFilter() {
+    void runSearch({
+      field,
+      mode,
+      value: value.trim(),
+    })
+  }
+
+  function applyRecentSearch(recentValue: string) {
+    if (!recentValue) return
+    setValue(recentValue)
+    void runSearch({
+      field,
+      mode,
+      value: recentValue.trim(),
+    })
   }
 
   function loadMoreLiteRows() {
@@ -968,8 +1030,12 @@ export function CosmosExplorer() {
           disabled={loading}
           className="h-9 rounded-lg bg-cyan-500 px-4 text-slate-950 hover:bg-cyan-400"
         >
-          {loading ? <Loader2 className="size-4 animate-spin" /> : null}
-          Apply Filter
+          {loading ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <Search className="size-4" />
+          )}
+          Search
         </Button>
       </div>
 
@@ -998,7 +1064,7 @@ export function CosmosExplorer() {
           <div className="min-h-0 flex-1 overflow-auto">
             {!hasSearched ? (
               <div className="px-3 py-10 text-center text-slate-500">
-                กรองแล้วกด Apply Filter เพื่อแสดงรายการ
+                กรองแล้วกด Search เพื่อแสดงรายการ
               </div>
             ) : loading ? (
               <div className="px-3 py-10 text-center text-slate-500">
@@ -1089,7 +1155,7 @@ export function CosmosExplorer() {
           <div className="flex items-center justify-between border-t border-slate-800 bg-slate-900/80 px-2 py-2 text-xs text-slate-400">
             <span className="truncate">
               {hasSearched
-                ? `${items.length} item${items.length === 1 ? "" : "s"}${requestCharge != null ? ` · ${requestCharge.toFixed(2)} RU` : ""}`
+                ? `${currentData.length} item${currentData.length === 1 ? "" : "s"}${requestCharge != null ? ` · ${requestCharge.toFixed(2)} RU` : ""}`
                 : "ยังไม่ค้นหา"}
             </span>
             {hasSearched && hasMore ? (

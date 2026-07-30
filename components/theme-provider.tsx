@@ -1,24 +1,99 @@
 "use client"
 
 import * as React from "react"
-import { ThemeProvider as NextThemesProvider, useTheme } from "next-themes"
 
-function ThemeProvider({
-  children,
-  ...props
-}: React.ComponentProps<typeof NextThemesProvider>) {
+type Theme = "dark" | "light" | "system"
+type ResolvedTheme = "dark" | "light"
+
+type ThemeContextValue = {
+  theme: Theme
+  setTheme: (theme: Theme) => void
+  resolvedTheme?: ResolvedTheme
+  themes: Theme[]
+}
+
+export const THEME_STORAGE_KEY = "theme"
+
+const ThemeContext = React.createContext<ThemeContextValue | undefined>(undefined)
+
+function getSystemTheme(): ResolvedTheme {
+  if (typeof window === "undefined") return "light"
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
+}
+
+function applyThemeClass(theme: Theme): ResolvedTheme {
+  const resolved = theme === "system" ? getSystemTheme() : theme
+  const root = document.documentElement
+  root.classList.remove("light", "dark")
+  root.classList.add(resolved)
+  root.style.colorScheme = resolved
+  return resolved
+}
+
+/** Inline FOUC-prevention script for Server Components (e.g. root layout `<head>`). */
+export const THEME_INIT_SCRIPT = `(function(){try{var k=${JSON.stringify(THEME_STORAGE_KEY)};var t=localStorage.getItem(k)||"system";var d=window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";var r=t==="system"?d:t;var e=document.documentElement;e.classList.remove("light","dark");e.classList.add(r);e.style.colorScheme=r}catch(e){}})();`
+
+function ThemeProvider({ children }: { children: React.ReactNode }) {
+  const [theme, setThemeState] = React.useState<Theme>("system")
+  const [resolvedTheme, setResolvedTheme] = React.useState<ResolvedTheme>("light")
+
+  React.useEffect(() => {
+    let stored: Theme = "system"
+    try {
+      const value = localStorage.getItem(THEME_STORAGE_KEY)
+      if (value === "light" || value === "dark" || value === "system") {
+        stored = value
+      }
+    } catch {
+      // ignore
+    }
+    setThemeState(stored)
+    setResolvedTheme(applyThemeClass(stored))
+
+    const media = window.matchMedia("(prefers-color-scheme: dark)")
+    const onChange = () => {
+      setThemeState((current) => {
+        if (current === "system") {
+          setResolvedTheme(applyThemeClass("system"))
+        }
+        return current
+      })
+    }
+    media.addEventListener("change", onChange)
+    return () => media.removeEventListener("change", onChange)
+  }, [])
+
+  const setTheme = React.useCallback((next: Theme) => {
+    setThemeState(next)
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, next)
+    } catch {
+      // ignore
+    }
+    setResolvedTheme(applyThemeClass(next))
+  }, [])
+
   return (
-    <NextThemesProvider
-      attribute="class"
-      defaultTheme="system"
-      enableSystem
-      disableTransitionOnChange
-      {...props}
+    <ThemeContext.Provider
+      value={{
+        theme,
+        setTheme,
+        resolvedTheme,
+        themes: ["light", "dark", "system"],
+      }}
     >
       <ThemeHotkey />
       {children}
-    </NextThemesProvider>
+    </ThemeContext.Provider>
   )
+}
+
+function useTheme() {
+  const context = React.useContext(ThemeContext)
+  if (!context) {
+    throw new Error("useTheme must be used within ThemeProvider")
+  }
+  return context
 }
 
 function isTypingTarget(target: EventTarget | null) {
@@ -68,4 +143,4 @@ function ThemeHotkey() {
   return null
 }
 
-export { ThemeProvider }
+export { ThemeProvider, useTheme }

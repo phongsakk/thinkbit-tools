@@ -17,7 +17,7 @@ export function AppSidebar() {
   const pathname = usePathname()
 
   return (
-    <aside className="flex w-60 shrink-0 flex-col border-r border-slate-800 bg-slate-950 text-slate-200">
+    <aside className="sticky top-0 flex h-svh w-60 shrink-0 flex-col border-r border-slate-800 bg-slate-950 text-slate-200">
       <div className="border-b border-slate-800 px-4 py-4">
         <div className="text-sm font-semibold tracking-tight text-white">Thinkbit Tools</div>
         <div className="mt-1 text-[11px] text-slate-400">Internal platform</div>

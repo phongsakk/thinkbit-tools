@@ -25,6 +25,7 @@
 !/download/prepare/
 !/download/blob/
 !/download/upload-history/
+!/download/cosmos-query/
 /download/cosmos/*
 !/download/cosmos/.gitkeep
 /download/prepare/*
@@ -33,6 +34,8 @@
 !/download/blob/.gitkeep
 /download/upload-history/*
 !/download/upload-history/.gitkeep
+/download/cosmos-query/*
+!/download/cosmos-query/.gitkeep
 
 # misc
 .DS_Store

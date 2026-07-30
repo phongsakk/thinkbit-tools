@@ -1,9 +1,18 @@
 import { cosmosSqlQuery } from "@/lib/cosmos"
 import {
-  extractUploadTimestamp,
+  buildUploadHistoryCacheKey,
+  extractUploadPathMeta,
   getUploadHistoryStoragePath,
   isUploadHistoryFresh,
+  mergeWarehouseManifest,
+  normalizeUploadHistoryFilters,
+  normalizeWarehouses,
+  readWarehouseManifest,
+  readSearchManifest,
   readUploadHistoryCache,
+  UPLOAD_HISTORY_TTL_MS,
+  UPLOAD_HISTORY_VERSION,
+  upsertSearchManifest,
   writeUploadHistoryCache,
   type UploadHistoryGroup,
   type UploadHistoryPayload,
@@ -16,20 +25,86 @@ export const maxDuration = 60
 type LiteItem = {
   id?: string
   blobFileName?: string
+  createdAt?: string
 }
 
-async function buildUploadHistory(): Promise<UploadHistoryPayload> {
-  const counts = new Map<string, number>()
+function groupKey(timestamp: string, factoryId: string, period: string) {
+  return `${timestamp}\0${factoryId}\0${period}`
+}
+
+type UploadHistoryFilters = {
+  fromTime?: string
+  toTime?: string
+  warehouses?: string | string[]
+}
+
+function normalizeFilters(filters?: UploadHistoryFilters) {
+  return normalizeUploadHistoryFilters(filters)
+}
+
+function toIsoOrNull(input: string | null) {
+  if (!input) return null
+  const parsed = Date.parse(input)
+  if (!Number.isFinite(parsed)) return null
+  return new Date(parsed).toISOString()
+}
+
+async function buildUploadHistory(filters?: UploadHistoryFilters): Promise<{
+  payload: UploadHistoryPayload
+  warehouses: string[]
+  cacheKey: string
+  searchHistory: Awaited<ReturnType<typeof readSearchManifest>>
+}> {
+  const normalized = normalizeFilters(filters)
+  const cacheKey = buildUploadHistoryCacheKey(normalized)
+  const fromIso = toIsoOrNull(normalized.fromTime)
+  const toIso = toIsoOrNull(normalized.toTime)
+  const warehouseSet = new Set(normalized.warehouses)
+  if (normalized.fromTime && !fromIso) {
+    throw new Error("Invalid from_time")
+  }
+  if (normalized.toTime && !toIso) {
+    throw new Error("Invalid to_time")
+  }
+  if (fromIso && toIso && Date.parse(fromIso) > Date.parse(toIso)) {
+    throw new Error("from_time must be earlier than to_time")
+  }
+
+  const counts = new Map<
+    string,
+    {
+      timestamp: string
+      factory_id: string
+      transaction_period: string
+      count: number
+      latestCreatedAtMs: number | null
+    }
+  >()
+  const foundWarehouses = new Set<string>()
   let continuationToken: string | null = null
   let pages = 0
   let itemsLoaded = 0
   let ru = 0
-  const maxPages = 40
+  const maxPages = 200
+
+  const whereParts: string[] = []
+  const parameters: Array<{ name: string; value: string }> = []
+  if (fromIso) {
+    whereParts.push("c.createdAt >= @fromTime")
+    parameters.push({ name: "@fromTime", value: fromIso })
+  }
+  if (toIso) {
+    whereParts.push("c.createdAt <= @toTime")
+    parameters.push({ name: "@toTime", value: toIso })
+  }
+  const query =
+    `SELECT c.id, c.blobFileName, c.createdAt FROM c` +
+    (whereParts.length > 0 ? ` WHERE ${whereParts.join(" AND ")}` : "")
 
   do {
     const result = await cosmosSqlQuery<LiteItem>(
-      "SELECT c.id, c.blobFileName FROM c",
-      [],
+      query,
+      parameters,
       {
         maxItemCount: 100,
         continuationToken,
@@ -38,9 +113,38 @@ async function buildUploadHistory(): Promise<UploadHistoryPayload> {
 
     for (const item of result.items) {
       if (typeof item.blobFileName !== "string") continue
-      const ts = extractUploadTimestamp(item.blobFileName)
-      if (!ts) continue
-      counts.set(ts, (counts.get(ts) ?? 0) + 1)
+      const meta = extractUploadPathMeta(item.blobFileName)
+      if (!meta) continue
+      if (warehouseSet.size > 0 && !warehouseSet.has(meta.factory_id)) continue
+
+      if (meta.factory_id && meta.factory_id !== "—") {
+        foundWarehouses.add(meta.factory_id)
+      }
+      const key = groupKey(meta.timestamp, meta.factory_id, meta.transaction_period)
+      const createdAtMs =
+        typeof item.createdAt === "string" && item.createdAt.trim().length > 0
+          ? Date.parse(item.createdAt)
+          : Number.NaN
+      const normalizedCreatedAtMs = Number.isFinite(createdAtMs) ? createdAtMs : null
+      const existing = counts.get(key)
+      if (existing) {
+        existing.count += 1
+        if (
+          normalizedCreatedAtMs != null &&
+          (existing.latestCreatedAtMs == null ||
+            normalizedCreatedAtMs > existing.latestCreatedAtMs)
+        ) {
+          existing.latestCreatedAtMs = normalizedCreatedAtMs
+        }
+      } else {
+        counts.set(key, {
+          timestamp: meta.timestamp,
+          factory_id: meta.factory_id,
+          transaction_period: meta.transaction_period,
+          count: 1,
+          latestCreatedAtMs: normalizedCreatedAtMs,
+        })
+      }
       itemsLoaded += 1
     }
 
@@ -51,43 +155,118 @@ async function buildUploadHistory(): Promise<UploadHistoryPayload> {
     pages += 1
   } while (continuationToken && pages < maxPages)
 
-  const groups: UploadHistoryGroup[] = Array.from(counts.entries())
-    .map(([timestamp, count]) => ({ timestamp, count }))
+  const groups: UploadHistoryGroup[] = Array.from(counts.values())
     .sort((a, b) => {
+      if (a.latestCreatedAtMs != null && b.latestCreatedAtMs != null) {
+        if (a.latestCreatedAtMs !== b.latestCreatedAtMs) {
+          return b.latestCreatedAtMs - a.latestCreatedAtMs
+        }
+      } else if (a.latestCreatedAtMs != null || b.latestCreatedAtMs != null) {
+        return a.latestCreatedAtMs == null ? 1 : -1
+      }
       const an = Number(a.timestamp)
       const bn = Number(b.timestamp)
-      if (Number.isFinite(an) && Number.isFinite(bn)) return bn - an
-      return b.timestamp.localeCompare(a.timestamp)
+      if (Number.isFinite(an) && Number.isFinite(bn) && an !== bn) return bn - an
+      const tsCmp = b.timestamp.localeCompare(a.timestamp)
+      if (tsCmp !== 0) return tsCmp
+      const facCmp = a.factory_id.localeCompare(b.factory_id)
+      if (facCmp !== 0) return facCmp
+      return a.transaction_period.localeCompare(b.transaction_period)
     })
+    .map(({ timestamp, factory_id, transaction_period, count }) => ({
+      timestamp,
+      factory_id,
+      transaction_period,
+      count,
+    }))
 
-  return writeUploadHistoryCache({
+  const payloadToSave: UploadHistoryPayload = {
+    version: UPLOAD_HISTORY_VERSION,
+    savedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + UPLOAD_HISTORY_TTL_MS).toISOString(),
     groups,
     totalItems: itemsLoaded,
     requestCharge: ru > 0 ? ru : null,
     truncated: Boolean(continuationToken),
-  })
+  }
+
+  const hasFilters = Boolean(
+    normalized.fromTime || normalized.toTime || normalized.warehouses.length > 0
+  )
+  const payload = hasFilters
+    ? payloadToSave
+    : await writeUploadHistoryCache({
+        groups,
+        totalItems: itemsLoaded,
+        requestCharge: ru > 0 ? ru : null,
+        truncated: Boolean(continuationToken),
+        cacheKey,
+      })
+
+  if (hasFilters) {
+    await writeUploadHistoryCache({
+      groups,
+      totalItems: itemsLoaded,
+      requestCharge: ru > 0 ? ru : null,
+      truncated: Boolean(continuationToken),
+      savedAt: payloadToSave.savedAt,
+      cacheKey,
+    })
+  }
+  const searchHistory = await upsertSearchManifest(normalized, payloadToSave.savedAt, cacheKey)
+  const warehouses = await mergeWarehouseManifest(Array.from(foundWarehouses))
+  return { payload, warehouses, cacheKey, searchHistory }
 }
 
-async function getUploadHistory(forceFresh: boolean) {
+async function getUploadHistory(forceFresh: boolean, filters?: UploadHistoryFilters) {
+  const normalized = normalizeFilters(filters)
+  const hasFilters = Boolean(
+    normalized.fromTime || normalized.toTime || normalized.warehouses.length > 0
+  )
+  const cacheKey = buildUploadHistoryCacheKey(normalized)
+
   if (!forceFresh) {
-    const cached = await readUploadHistoryCache()
-    if (cached && isUploadHistoryFresh(cached)) {
-      return { ...cached, source: "cache" as const }
+    const cached = await readUploadHistoryCache(cacheKey)
+    // Filtered cache never expires; no-filter cache still uses TTL.
+    const canUseCache = cached && (hasFilters || isUploadHistoryFresh(cached))
+    if (canUseCache) {
+      const warehouses = await readWarehouseManifest()
+      const searchHistory = await upsertSearchManifest(normalized, cached.savedAt, cacheKey)
+      return {
+        ...cached,
+        source: "cache" as const,
+        warehouses,
+        cacheKey,
+        searchHistory,
+      }
     }
   }
 
-  const fresh = await buildUploadHistory()
-  return { ...fresh, source: "fresh" as const }
+  const { payload, warehouses, cacheKey: builtCacheKey, searchHistory } =
+    await buildUploadHistory(filters)
+  return {
+    ...payload,
+    source: "fresh" as const,
+    warehouses,
+    cacheKey: builtCacheKey,
+    searchHistory,
+  }
 }
 
 export async function GET(request: Request) {
   try {
-    const forceFresh = new URL(request.url).searchParams.get("fresh") === "1"
-    const payload = await getUploadHistory(forceFresh)
+    const url = new URL(request.url)
+    const forceFresh = url.searchParams.get("fresh") === "1"
+    const warehouses = normalizeWarehouses(url.searchParams.getAll("warehouse"))
+    const payload = await getUploadHistory(forceFresh, {
+      fromTime: url.searchParams.get("from_time") ?? undefined,
+      toTime: url.searchParams.get("to_time") ?? undefined,
+      warehouses,
+    })
     return Response.json({
       ok: true,
       ...payload,
-      storagePath: getUploadHistoryStoragePath(),
+      storagePath: getUploadHistoryStoragePath(payload.cacheKey),
     })
   } catch (error) {
     const message =
@@ -99,13 +278,23 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json().catch(() => ({}))) as { force?: boolean }
+    const body = (await request.json().catch(() => ({}))) as {
+      force?: boolean
+      from_time?: string
+      to_time?: string
+      warehouse?: string | string[]
+      warehouses?: string | string[]
+    }
     const forceFresh = body.force !== false
-    const payload = await getUploadHistory(forceFresh)
+    const payload = await getUploadHistory(forceFresh, {
+      fromTime: body.from_time,
+      toTime: body.to_time,
+      warehouses: body.warehouses ?? body.warehouse,
+    })
     return Response.json({
       ok: true,
       ...payload,
-      storagePath: getUploadHistoryStoragePath(),
+      storagePath: getUploadHistoryStoragePath(payload.cacheKey),
     })
   } catch (error) {
     const message =
