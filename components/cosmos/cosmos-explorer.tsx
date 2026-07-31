@@ -8,7 +8,7 @@ import {
   useState,
 } from "react"
 import { useRouter } from "next/navigation"
-import { ChevronRight, ChevronsDownUp, ChevronsUpDown, CloudDownload, Columns2, Download, FileDown, FileText, FolderTree, HardDrive, History, Loader2, Rows2, Search, Trash2, WandSparkles } from "lucide-react"
+import { ChevronRight, ChevronsDownUp, ChevronsUpDown, CloudDownload, Columns2, Download, FileDown, FileText, FolderTree, HardDrive, History, Loader2, Rows2, ScanText, Search, Trash2, WandSparkles } from "lucide-react"
 import { JsonView, allExpanded, collapseAllNested, darkStyles } from "react-json-view-lite"
 import "react-json-view-lite/dist/index.css"
 
@@ -91,6 +91,16 @@ type PdfCacheResult = {
   source?: "cache" | "fresh"
   path?: string
   fileName?: string
+  error?: string
+}
+
+type OcrResult = {
+  ok?: boolean
+  documentId?: string
+  item?: CosmosItem
+  source?: "cache" | "fresh"
+  pdf?: { source?: "cache" | "fresh"; fileName?: string; path?: string }
+  updatedAt?: string
   error?: string
 }
 
@@ -352,6 +362,7 @@ export function CosmosExplorer({
   const [prepareSource, setPrepareSource] = useState<"cache" | "fresh" | null>(null)
   const [blobSource, setBlobSource] = useState<"cache" | "fresh" | null>(null)
   const [cachingPdf, setCachingPdf] = useState(false)
+  const [runningOcr, setRunningOcr] = useState(false)
   const [flushingCache, setFlushingCache] = useState(false)
   const [pageCacheMap, setPageCacheMap] = useState<
     Record<
@@ -777,6 +788,53 @@ export function CosmosExplorer({
       setError(err instanceof Error ? err.message : "PDF cache failed")
     } finally {
       setCachingPdf(false)
+    }
+  }
+
+  async function handleOcr() {
+    const targetId = selectedId
+    const blobFileName =
+      selectedBlobFileName ||
+      (typeof document?.blobFileName === "string" ? document.blobFileName : null)
+    if (!targetId) return
+    if (!blobFileName) {
+      setError("No blobFileName for selected page")
+      return
+    }
+
+    setError(null)
+    setActionMessage(null)
+    setRunningOcr(true)
+
+    try {
+      const response = await fetch("/api/cosmos/ocr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ documentId: targetId, blobFileName }),
+      })
+      const data = await readApiPayload<OcrResult>(response)
+      if (!response.ok) {
+        throw new Error(data.error || "OCR failed")
+      }
+      if (selectedId !== targetId) return
+
+      if (data.item) {
+        setDocument(data.item)
+        setDocumentSource("fresh")
+      }
+      setPrepareResult(null)
+      setPrepareSource(null)
+      setBlobSource("cache")
+      await refreshPageCacheMap(allPageIds)
+
+      const pdfLabel = data.pdf?.fileName ? ` · PDF ${data.pdf.source ?? "cache"}: ${data.pdf.fileName}` : ""
+      setActionMessage(
+        `OCR done — fields updated · flushed fetch/prepare cache · updatedAt ${data.updatedAt ?? "—"}${pdfLabel}`
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "OCR failed")
+    } finally {
+      setRunningOcr(false)
     }
   }
 
@@ -1299,7 +1357,12 @@ export function CosmosExplorer({
                 variant="outline"
                 disabled={!selectedId || fetchingDocument}
                 onClick={() => void handleFetchDocument()}
-                className="h-7 rounded-md border-slate-600 bg-slate-900 text-slate-200 hover:bg-slate-800 hover:text-white"
+                className={cn(
+                  "h-7 rounded-md",
+                  documentSource === "cache" || pageCacheMap[selectedId ?? ""]?.document
+                    ? "border-cyan-400 bg-cyan-500 text-slate-950 hover:bg-cyan-400 hover:text-slate-950"
+                    : "border-slate-600 bg-slate-900 text-slate-200 hover:bg-slate-800 hover:text-white"
+                )}
               >
                 {fetchingDocument ? (
                   <Loader2 className="size-3.5 animate-spin" />
@@ -1338,9 +1401,31 @@ export function CosmosExplorer({
               <Button
                 type="button"
                 size="sm"
+                variant="outline"
+                disabled={!selectedId || !selectedBlobFileName || runningOcr}
+                onClick={() => void handleOcr()}
+                title="Cache PDF if needed, run OCR, replace document.fields + updatedAt in Cosmos"
+                className="h-7 rounded-md border-violet-500/60 bg-violet-500/15 text-violet-100 hover:bg-violet-500/25 hover:text-white"
+              >
+                {runningOcr ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <ScanText className="size-3.5" />
+                )}
+                OCR
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
                 disabled={!selectedId || preparing}
                 onClick={() => void handlePrepare()}
-                className="h-7 rounded-md bg-cyan-500 text-slate-950 hover:bg-cyan-400"
+                className={cn(
+                  "h-7 rounded-md",
+                  prepareSource === "cache" || pageCacheMap[selectedId ?? ""]?.prepare
+                    ? "border-cyan-400 bg-cyan-500 text-slate-950 hover:bg-cyan-400 hover:text-slate-950"
+                    : "border-slate-600 bg-slate-900 text-slate-200 hover:bg-slate-800 hover:text-white"
+                )}
               >
                 {preparing ? (
                   <Loader2 className="size-3.5 animate-spin" />

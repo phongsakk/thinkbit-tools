@@ -207,3 +207,66 @@ export async function cosmosGetDocumentById<T = Record<string, unknown>>(
   )
   return result.items[0] ?? null
 }
+
+/**
+ * Replace an existing document (PUT).
+ * Tries `/id` partition key first, then `documentId` if present.
+ */
+export async function cosmosReplaceDocument<T extends Record<string, unknown>>(
+  document: T
+): Promise<T> {
+  assertCosmosEnv()
+
+  const id = typeof document.id === "string" ? document.id.trim() : ""
+  if (!id) {
+    throw new Error("Document id is required for replace")
+  }
+
+  const databaseId = requiredEnv("COSMOS_DATABASE_ID")
+  const containerId = requiredEnv("COSMOS_CONTAINER_ID")
+  const resourceLink = `dbs/${databaseId}/colls/${containerId}/docs/${id}`
+  const path = `/dbs/${encodeURIComponent(databaseId)}/colls/${encodeURIComponent(containerId)}/docs/${encodeURIComponent(id)}`
+
+  const {
+    _rid: _r,
+    _self: _s,
+    _etag: _e,
+    _attachments: _a,
+    _ts: _t,
+    ...body
+  } = document as T & {
+    _rid?: unknown
+    _self?: unknown
+    _etag?: unknown
+    _attachments?: unknown
+    _ts?: unknown
+  }
+
+  const partitionCandidates = [
+    id,
+    typeof document.documentId === "string" ? document.documentId.trim() : "",
+  ].filter(Boolean)
+  const uniquePartitions = Array.from(new Set(partitionCandidates))
+
+  let lastError: Error | null = null
+  for (const partitionValue of uniquePartitions) {
+    try {
+      const { data } = await cosmosFetch("PUT", "docs", resourceLink, path, {
+        body: JSON.stringify(body),
+        headers: {
+          "Content-Type": "application/json",
+          "If-Match": "*",
+          "x-ms-documentdb-partitionkey": JSON.stringify([partitionValue]),
+        },
+      })
+      return (data ?? body) as T
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error))
+      if (!/partition/i.test(lastError.message)) {
+        throw lastError
+      }
+    }
+  }
+
+  throw lastError ?? new Error("Cosmos replace failed")
+}
