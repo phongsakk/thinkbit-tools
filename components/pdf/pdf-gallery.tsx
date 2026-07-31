@@ -133,8 +133,8 @@ export function PdfGallery() {
             <p className="text-sm text-slate-400">No cached PDFs yet</p>
             <p className="mt-1 text-xs text-slate-500">
               Use the PDF button in{" "}
-              <Link href="/cosmos" className="text-cyan-300 hover:underline">
-                Cosmos Explorer
+              <Link href="/doc-workbench" className="text-cyan-300 hover:underline">
+                Doc Workbench
               </Link>{" "}
               to download pages
             </p>
@@ -181,7 +181,7 @@ export function PdfGallery() {
                       Open
                     </a>
                     <Link
-                      href={`/cosmos?id=${encodeURIComponent(item.documentId)}`}
+                      href={`/doc-workbench?id=${encodeURIComponent(item.documentId)}`}
                       className="inline-flex h-8 items-center justify-center rounded-lg border border-slate-600 bg-slate-900 px-3 text-xs text-slate-200 hover:bg-slate-800"
                     >
                       Cosmos

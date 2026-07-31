@@ -6,8 +6,8 @@ import { Button } from "@/components/ui/button"
 
 const TOOL_LINKS = [
   {
-    href: "/cosmos",
-    label: "Open Cosmos Explorer",
+    href: "/doc-workbench",
+    label: "Open Doc Workbench",
     icon: Database,
     primary: true,
   },
@@ -37,13 +37,14 @@ export default function Page() {
         <div className="w-full space-y-4">
           <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-6 shadow-2xl backdrop-blur md:p-8">
             <p className="mb-3 inline-flex items-center rounded-full border border-cyan-300/30 bg-cyan-400/10 px-3 py-1 text-xs text-cyan-200">
-              Thinkbit Platform
+              Thinkbit · Oil Tax
             </p>
             <h1 className="text-3xl font-semibold tracking-tight text-white md:text-4xl">
-              Internal Tools Dashboard
+              Oil Tax Utility Tools
             </h1>
             <p className="mt-2 max-w-2xl text-sm text-slate-300 md:text-base">
-              Browse Cosmos documents, upload history, and cached PDFs from one place.
+              เครื่องมือภายในสำหรับอ่านและตรวจสอบเอกสารการยื่นภาษีน้ำมันจากการผลิต
+              เพื่อยืนยันรายการที่ขอลดหย่อนว่าถูกต้องตามกฎหมายก่อนนำไปใช้ลดหย่อนภาษี
             </p>
 
             <div className="mt-6 grid gap-2 sm:grid-cols-3">

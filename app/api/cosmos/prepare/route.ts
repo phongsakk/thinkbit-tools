@@ -1,4 +1,7 @@
-import { resolvePrepareUrl } from "@/lib/ocr-prepare-config"
+import {
+  resolvePreparePlan,
+  resolvePrepareUrl,
+} from "@/lib/ocr-prepare-config"
 import { getCachedPrepare, savePrepareResult } from "@/lib/local-cache"
 
 export const runtime = "nodejs"
@@ -8,6 +11,9 @@ type PrepareBody = {
   documentId?: string
   docType?: string
   forceFresh?: boolean
+  /** Persist local/empty prepare without calling upstream OCR prepare API. */
+  skipUpstream?: boolean
+  data?: unknown
 }
 
 type LoginResponse = {
@@ -104,6 +110,45 @@ export async function POST(request: Request) {
 
     if (!docType) {
       return Response.json({ error: "docType is required" }, { status: 400 })
+    }
+
+    const plan = resolvePreparePlan(docType)
+
+    if (body.skipUpstream || plan.kind === "empty" || plan.kind === "local") {
+      const data =
+        body.data !== undefined
+          ? body.data
+          : plan.kind === "empty"
+            ? {}
+            : body.data ?? {}
+
+      if (plan.kind === "local" && body.data === undefined && !body.skipUpstream) {
+        return Response.json(
+          {
+            error:
+              "Local prepare requires client-built data (warehouse/company from localStorage)",
+            plan,
+          },
+          { status: 400 }
+        )
+      }
+
+      const payload = {
+        ok: true,
+        url: null as string | null,
+        method: plan.kind === "empty" ? "empty" : "local",
+        docType,
+        documentId,
+        data: plan.kind === "empty" && body.data === undefined ? {} : data,
+        plan,
+      }
+
+      await savePrepareResult(documentId, payload, { docType, url: undefined })
+
+      return Response.json({
+        ...payload,
+        source: "fresh",
+      })
     }
 
     const url = resolvePrepareUrl(docType, documentId)

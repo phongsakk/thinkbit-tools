@@ -87,25 +87,44 @@ export function buildCosmosQueryCacheKey(input: {
   return Buffer.from(raw, "utf8").toString("base64url")
 }
 
-export function buildCosmosSearchHref(filter: {
-  field: CosmosFilterField
-  mode: CosmosFilterMode
-  value: string
-}) {
+export const COSMOS_RESULT_VIEWS = ["table", "raw"] as const
+export type CosmosResultView = (typeof COSMOS_RESULT_VIEWS)[number]
+
+export function isCosmosResultView(value: unknown): value is CosmosResultView {
+  return value === "table" || value === "raw"
+}
+
+export function parseCosmosResultView(value: unknown): CosmosResultView {
+  return isCosmosResultView(value) ? value : "table"
+}
+
+export function buildCosmosSearchHref(
+  filter: {
+    field: CosmosFilterField
+    mode: CosmosFilterMode
+    value: string
+  },
+  options?: { view?: CosmosResultView | null }
+) {
   const params = new URLSearchParams()
   const value = filter.value.trim()
-  if (!value) return "/cosmos"
 
-  if (filter.field === "unixtime") {
+  if (filter.field === "unixtime" && value) {
     params.set("unixtime", value)
-  } else if (filter.field === "id") {
+  } else if (filter.field === "id" && value) {
     params.set("id", value)
-  } else {
+  } else if (value) {
     params.set("field", filter.field)
     params.set("mode", filter.mode)
     params.set("value", value)
   }
-  return `/cosmos?${params.toString()}`
+
+  if (options?.view) {
+    params.set("view", options.view)
+  }
+
+  const query = params.toString()
+  return query ? `/doc-workbench?${query}` : "/doc-workbench"
 }
 
 export type ResolvedCosmosInitialFilter = {

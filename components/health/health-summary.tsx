@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { Suspense, useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import {
   Activity,
@@ -12,7 +12,9 @@ import {
   XCircle,
 } from "lucide-react"
 
+import { DeviceGeolocation, DeviceGeolocationSkeleton } from "@/components/health/device-geolocation"
 import { Button } from "@/components/ui/button"
+import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 
 type CheckResult = {
@@ -45,9 +47,41 @@ const CHECK_LABELS: Record<string, string> = {
   localCache: "Cache",
 }
 
+function HealthStatusSkeleton() {
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/60 px-3 py-2">
+        <Skeleton className="size-4 shrink-0 rounded-full" />
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <Skeleton className="h-4 w-44" />
+          <Skeleton className="h-3 w-28" />
+        </div>
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-3">
+        {["cosmos", "blob", "cache"].map((key) => (
+          <div
+            key={key}
+            className="rounded-xl border border-slate-700 bg-slate-900/60 px-3 py-2"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5">
+                <Skeleton className="size-3.5 shrink-0" />
+                <Skeleton className="h-3.5 w-14" />
+              </div>
+              <Skeleton className="size-3.5 shrink-0 rounded-full" />
+            </div>
+            <Skeleton className="mt-2 h-3 w-10" />
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function HealthSummary() {
   const [data, setData] = useState<HealthResponse | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   const runCheck = useCallback(async () => {
@@ -93,6 +127,8 @@ export function HealthSummary() {
     ? new Date(data.now).toLocaleString("th-TH", { hour12: false })
     : null
 
+  const showHealthSkeleton = loading && !data && !error
+
   return (
     <section className="rounded-2xl border border-white/10 bg-slate-900/50 p-4 backdrop-blur">
       <div className="mb-3 flex items-center justify-between gap-2">
@@ -129,14 +165,10 @@ export function HealthSummary() {
         </div>
       )}
 
-      {!data && !error && loading && (
-        <div className="flex items-center justify-center py-6">
-          <Loader2 className="size-5 animate-spin text-slate-500" />
-        </div>
-      )}
+      {showHealthSkeleton ? <HealthStatusSkeleton /> : null}
 
-      {data && (
-        <div className="space-y-3">
+      {data && !showHealthSkeleton ? (
+        <div className={cn("space-y-3", loading && "opacity-70")}>
           <div
             className={cn(
               "flex items-center gap-2 rounded-xl border px-3 py-2",
@@ -193,7 +225,13 @@ export function HealthSummary() {
             })}
           </div>
         </div>
-      )}
+      ) : null}
+
+      <div className="mt-3">
+        <Suspense fallback={<DeviceGeolocationSkeleton />}>
+          <DeviceGeolocation />
+        </Suspense>
+      </div>
     </section>
   )
 }

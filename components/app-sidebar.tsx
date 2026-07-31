@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils"
 
 const NAV_ITEMS = [
   { href: "/", label: "Home", icon: Home },
-  { href: "/cosmos", label: "Cosmos Explorer", icon: Database },
+  { href: "/doc-workbench", label: "Doc Workbench", icon: Database },
   { href: "/upload-history", label: "Upload History", icon: Upload },
   { href: "/pdf", label: "PDF Cache", icon: FileText },
 ] as const
@@ -19,8 +19,10 @@ export function AppSidebar() {
   return (
     <aside className="sticky top-0 flex h-svh w-60 shrink-0 flex-col border-r border-slate-800 bg-slate-950 text-slate-200">
       <div className="border-b border-slate-800 px-4 py-4">
-        <div className="text-sm font-semibold tracking-tight text-white">Thinkbit Tools</div>
-        <div className="mt-1 text-[11px] text-slate-400">Internal platform</div>
+        <div className="text-sm font-semibold tracking-tight text-white">Oil Tax Utility Tools</div>
+        <div className="mt-1 text-[11px] leading-snug text-slate-400">
+          ตรวจเอกสารยื่นภาษีน้ำมันตามกฎหมาย
+        </div>
       </div>
 
       <nav className="flex flex-1 flex-col gap-1 p-2">

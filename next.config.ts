@@ -7,6 +7,15 @@ const nextConfig: NextConfig = {
     : {}),
   // Prevent Next from bundling Azure SDKs into serverless functions.
   serverExternalPackages: ["@azure/storage-blob"],
+  async redirects() {
+    return [
+      {
+        source: "/cosmos",
+        destination: "/doc-workbench",
+        permanent: true,
+      },
+    ]
+  },
 }
 
 export default nextConfig

@@ -1,11 +1,11 @@
 import type { Metadata } from "next"
 
-import { CosmosExplorer } from "@/components/cosmos/cosmos-explorer"
+import { DocWorkbench } from "@/components/cosmos/cosmos-explorer"
 import { loadInitialCosmosQuery } from "@/lib/cosmos-query"
 
 export const metadata: Metadata = {
-  title: "Cosmos Data Explorer",
-  description: "Browse and filter documents in Azure Cosmos DB",
+  title: "Doc Workbench",
+  description: "Inspect, prepare, and OCR tax documents from Azure Cosmos DB",
 }
 
 export const dynamic = "force-dynamic"
@@ -15,7 +15,7 @@ function asSingle(value: string | string[] | undefined): string | undefined {
   return value
 }
 
-export default async function CosmosPage({
+export default async function DocWorkbenchPage({
   searchParams,
 }: {
   searchParams?: Promise<Record<string, string | string[] | undefined>>
@@ -31,10 +31,11 @@ export default async function CosmosPage({
   })
 
   return (
-    <CosmosExplorer
+    <DocWorkbench
       initialFilter={initial.filter}
       initialData={initial.result}
       initialError={initial.error}
+      initialView={asSingle(sp.view)}
     />
   )
 }

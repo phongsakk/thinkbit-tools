@@ -368,7 +368,7 @@ export function UploadHistoryPanel({
                     </td>
                     <td className="px-4 py-3 text-right">
                       <Link
-                        href={`/cosmos?unixtime=${encodeURIComponent(group.timestamp)}`}
+                        href={`/doc-workbench?unixtime=${encodeURIComponent(group.timestamp)}`}
                         className="text-xs text-cyan-300 hover:text-cyan-200 hover:underline"
                       >
                         Open in Cosmos

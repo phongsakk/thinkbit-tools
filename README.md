@@ -20,4 +20,4 @@ To use the components in your app, import them as follows:
 import { Button } from "@/components/ui/button";
 ```
 
-https://thinkbit-tools.vercel.app/cosmos
+https://thinkbit-tools.vercel.app/doc-workbench
