@@ -26,26 +26,26 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next()
   }
 
-  // APIs: JSON 403. Pages: redirect home to verify location.
+  // APIs: JSON 403. Pages: redirect to /auth to verify location.
   if (pathname.startsWith("/api/") || pathname.startsWith("/download/")) {
     return NextResponse.json(
       {
-        error: "Geofence required — verify location on the home page first",
+        error: "Geofence required — verify location on /auth first",
         code: "GEO_FENCE_REQUIRED",
       },
       { status: 403 }
     )
   }
 
-  const home = request.nextUrl.clone()
-  home.pathname = "/"
-  home.search = ""
-  home.searchParams.set("geo", "required")
+  const auth = request.nextUrl.clone()
+  auth.pathname = "/auth"
+  auth.search = ""
+  auth.searchParams.set("geo", "required")
   const nextPath = `${pathname}${search}`
-  if (nextPath && nextPath !== "/") {
-    home.searchParams.set("next", nextPath)
+  if (nextPath && nextPath !== "/" && nextPath !== "/auth") {
+    auth.searchParams.set("next", nextPath)
   }
-  return NextResponse.redirect(home)
+  return NextResponse.redirect(auth)
 }
 
 export const config = {

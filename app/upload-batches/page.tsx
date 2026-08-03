@@ -7,8 +7,8 @@ import { normalizeWarehouses } from "@/lib/upload-history-cache"
 import { getUploadHistory } from "@/lib/upload-history-service"
 
 export const metadata: Metadata = {
-  title: "Upload History",
-  description: "Upload batches with server-side filters and cache",
+  title: "ชุดอัปโหลด",
+  description: "ดูชุดอัปโหลดเอกสารแบบจัดกลุ่มตาม batch / คลัง / ช่วงธุรกรรม",
 }
 
 export const dynamic = "force-dynamic"
@@ -25,7 +25,7 @@ function asList(value: string | string[] | undefined): string[] {
   return []
 }
 
-export default async function UploadHistoryPage({
+export default async function UploadBatchesPage({
   searchParams,
 }: {
   searchParams?: Promise<Record<string, string | string[] | undefined>>
@@ -45,8 +45,8 @@ export default async function UploadHistoryPage({
       warehouses: warehousesSelected,
     })
   } catch (err) {
-    error = err instanceof Error ? err.message : "Failed to load upload history"
-    console.error("[upload-history/page]", error)
+    error = err instanceof Error ? err.message : "Failed to load upload batches"
+    console.error("[upload-batches/page]", error)
   }
 
   return (

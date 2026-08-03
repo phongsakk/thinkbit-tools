@@ -1,25 +1,30 @@
+import type { Metadata } from "next"
 import Link from "next/link"
 import { Database, FileText, Upload } from "lucide-react"
 
 import { HealthSummary } from "@/components/health/health-summary"
 import { Button } from "@/components/ui/button"
 
+export const metadata: Metadata = {
+  title: "หน้าหลัก",
+}
+
 const TOOL_LINKS = [
   {
-    href: "/doc-workbench",
-    label: "Open Doc Workbench",
-    icon: Database,
+    href: "/upload-batches",
+    label: "ชุดอัปโหลด",
+    icon: Upload,
     primary: true,
   },
   {
-    href: "/upload-history",
-    label: "Upload History",
-    icon: Upload,
+    href: "/docs",
+    label: "โต๊ะเอกสาร",
+    icon: Database,
     primary: false,
   },
   {
-    href: "/pdf",
-    label: "PDF Cache",
+    href: "/pdf-cache",
+    label: "คลัง PDF",
     icon: FileText,
     primary: false,
   },
@@ -40,7 +45,7 @@ export default function Page() {
               Thinkbit · Oil Tax
             </p>
             <h1 className="text-3xl font-semibold tracking-tight text-white md:text-4xl">
-              Oil Tax Utility Tools
+              หน้าหลัก
             </h1>
             <p className="mt-2 max-w-2xl text-sm text-slate-300 md:text-base">
               เครื่องมือภายในสำหรับอ่านและตรวจสอบเอกสารการยื่นภาษีน้ำมันจากการผลิต
@@ -67,6 +72,13 @@ export default function Page() {
                 )
               })}
             </div>
+
+            <p className="mt-4 text-xs text-slate-500">
+              เข้าเครื่องมืออื่นต้องยืนยันตำแหน่งก่อน ·{" "}
+              <Link href="/auth" className="text-cyan-300 hover:underline">
+                ไปหน้ายืนยันตำแหน่ง
+              </Link>
+            </p>
           </div>
 
           <HealthSummary />

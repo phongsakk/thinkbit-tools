@@ -1,6 +1,6 @@
 "use client"
 
-import { Suspense, useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import {
   Activity,
@@ -12,7 +12,6 @@ import {
   XCircle,
 } from "lucide-react"
 
-import { DeviceGeolocation, DeviceGeolocationSkeleton } from "@/components/health/device-geolocation"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
@@ -133,8 +132,8 @@ export function HealthSummary() {
     <section className="rounded-2xl border border-white/10 bg-slate-900/50 p-4 backdrop-blur">
       <div className="mb-3 flex items-center justify-between gap-2">
         <div>
-          <h2 className="text-sm font-semibold text-white">System Health</h2>
-          <p className="text-[11px] text-slate-400">Live summary</p>
+          <h2 className="text-sm font-semibold text-white">สุขภาพระบบ</h2>
+          <p className="text-[11px] text-slate-400">สรุปสถานะแบบสด</p>
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -154,7 +153,7 @@ export function HealthSummary() {
             href="/health"
             className="rounded-md px-2 py-1 text-xs text-cyan-300 hover:bg-cyan-500/10 hover:text-cyan-200"
           >
-            Details
+            รายละเอียด
           </Link>
         </div>
       </div>
@@ -226,12 +225,6 @@ export function HealthSummary() {
           </div>
         </div>
       ) : null}
-
-      <div className="mt-3">
-        <Suspense fallback={<DeviceGeolocationSkeleton />}>
-          <DeviceGeolocation />
-        </Suspense>
-      </div>
     </section>
   )
 }

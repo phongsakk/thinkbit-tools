@@ -1,3 +1,5 @@
+import type { Metadata } from "next"
+
 import { Geist_Mono, Prompt } from "next/font/google"
 
 import "./globals.css"
@@ -16,6 +18,15 @@ const fontMono = Geist_Mono({
   variable: "--font-mono",
 })
 
+export const metadata: Metadata = {
+  title: {
+    default: "Oil Tax Utility Tools - หน้าหลัก",
+    template: "Oil Tax Utility Tools - %s",
+  },
+  description:
+    "เครื่องมือภายในสำหรับอ่านและตรวจสอบเอกสารการยื่นภาษีน้ำมันจากการผลิต",
+}
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -23,7 +34,7 @@ export default function RootLayout({
 }>) {
   return (
     <html
-      lang="en"
+      lang="th"
       suppressHydrationWarning
       className={cn("antialiased", fontMono.variable, "font-sans", prompt.variable)}
     >

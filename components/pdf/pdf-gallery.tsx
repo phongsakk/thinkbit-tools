@@ -88,14 +88,14 @@ export function PdfGallery() {
           <div>
             <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-cyan-300/30 bg-cyan-400/10 px-3 py-1 text-xs text-cyan-200">
               <FileText className="size-3.5" />
-              PDF Cache
+              Thinkbit · Oil Tax
             </div>
             <h1 className="text-2xl font-semibold tracking-tight text-white">
-              Cached PDFs
+              คลัง PDF
             </h1>
             <p className="mt-1 text-xs text-slate-400">
-              Files from <code className="text-slate-300">download/blob</code> via{" "}
-              <code className="text-slate-300">manifest.json</code>
+              PDF ที่ cache ไว้ใน <code className="text-slate-300">download/blob</code>{" "}
+              จาก <code className="text-slate-300">manifest.json</code>
             </p>
           </div>
           <Button
@@ -133,8 +133,8 @@ export function PdfGallery() {
             <p className="text-sm text-slate-400">No cached PDFs yet</p>
             <p className="mt-1 text-xs text-slate-500">
               Use the PDF button in{" "}
-              <Link href="/doc-workbench" className="text-cyan-300 hover:underline">
-                Doc Workbench
+              <Link href="/docs" className="text-cyan-300 hover:underline">
+                โต๊ะเอกสาร
               </Link>{" "}
               to download pages
             </p>
@@ -181,10 +181,10 @@ export function PdfGallery() {
                       Open
                     </a>
                     <Link
-                      href={`/doc-workbench?id=${encodeURIComponent(item.documentId)}`}
+                      href={`/docs?id=${encodeURIComponent(item.documentId)}`}
                       className="inline-flex h-8 items-center justify-center rounded-lg border border-slate-600 bg-slate-900 px-3 text-xs text-slate-200 hover:bg-slate-800"
                     >
-                      Cosmos
+                      โต๊ะเอกสาร
                     </Link>
                   </div>
                 </div>

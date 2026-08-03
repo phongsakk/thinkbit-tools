@@ -11,7 +11,22 @@ const nextConfig: NextConfig = {
     return [
       {
         source: "/cosmos",
-        destination: "/doc-workbench",
+        destination: "/docs",
+        permanent: true,
+      },
+      {
+        source: "/doc-workbench",
+        destination: "/docs",
+        permanent: true,
+      },
+      {
+        source: "/upload-history",
+        destination: "/upload-batches",
+        permanent: true,
+      },
+      {
+        source: "/pdf",
+        destination: "/pdf-cache",
         permanent: true,
       },
     ]

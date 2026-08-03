@@ -60,7 +60,7 @@ function buildHref(params: {
   if (params.fresh) url.set("fresh", "1")
   url.set("_q", String(Date.now()))
   const qs = url.toString()
-  return qs ? `/upload-history?${qs}` : "/upload-history"
+  return qs ? `/upload-batches?${qs}` : "/upload-batches"
 }
 
 function formatWarehousesLabel(warehouses: string[]) {
@@ -158,7 +158,7 @@ export function UploadHistoryPanel({
   }
 
   function onClear() {
-    navigate("/upload-history")
+    navigate("/upload-batches")
   }
 
   const inputClass =
@@ -171,11 +171,11 @@ export function UploadHistoryPanel({
           <div>
             <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-cyan-300/30 bg-cyan-400/10 px-3 py-1 text-xs text-cyan-200">
               <Upload className="size-3.5" />
-              Upload History (Server Side)
+              Thinkbit · Oil Tax
             </div>
-            <h1 className="text-2xl font-semibold tracking-tight text-white">Upload batches</h1>
+            <h1 className="text-2xl font-semibold tracking-tight text-white">ชุดอัปโหลด</h1>
             <p className="mt-1 text-xs text-slate-400">
-              SSR table + filter ผ่าน query params
+              สรุปชุดอัปโหลดตามคลังและช่วงธุรกรรม · กรองผ่าน query params
             </p>
           </div>
           <Button
@@ -368,10 +368,10 @@ export function UploadHistoryPanel({
                     </td>
                     <td className="px-4 py-3 text-right">
                       <Link
-                        href={`/doc-workbench?unixtime=${encodeURIComponent(group.timestamp)}`}
+                        href={`/docs?unixtime=${encodeURIComponent(group.timestamp)}`}
                         className="text-xs text-cyan-300 hover:text-cyan-200 hover:underline"
                       >
-                        Open in Cosmos
+                        เปิดในโต๊ะเอกสาร
                       </Link>
                     </td>
                   </tr>

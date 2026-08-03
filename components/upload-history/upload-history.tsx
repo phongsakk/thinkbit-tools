@@ -172,16 +172,16 @@ export function UploadHistory() {
           <div>
             <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-cyan-300/30 bg-cyan-400/10 px-3 py-1 text-xs text-cyan-200">
               <Upload className="size-3.5" />
-              Upload History
+              Thinkbit · Oil Tax
             </div>
             <h1 className="text-2xl font-semibold tracking-tight text-white">
-              Upload batches
+              ชุดอัปโหลด
             </h1>
             <p className="mt-1 text-xs text-slate-400">
-              Grouped by timestamp + factory_id + transaction period from{" "}
-              <code className="text-slate-300">blobFileName</code> after the first{" "}
+              สรุปชุดอัปโหลดตามคลังและช่วงธุรกรรม จาก{" "}
+              <code className="text-slate-300">blobFileName</code> หลัง{" "}
               <code className="text-slate-300">/</code>
-              {" · "}API cache 1 hour in{" "}
+              {" · "}cache ที่{" "}
               <code className="text-slate-300">download/upload-history</code>
             </p>
           </div>
@@ -397,10 +397,10 @@ export function UploadHistory() {
                     </td>
                     <td className="px-4 py-3 text-right">
                       <Link
-                        href={`/doc-workbench?unixtime=${encodeURIComponent(group.timestamp)}`}
+                        href={`/docs?unixtime=${encodeURIComponent(group.timestamp)}`}
                         className="text-xs text-cyan-300 hover:text-cyan-200 hover:underline"
                       >
-                        Open in Cosmos
+                        เปิดในโต๊ะเอกสาร
                       </Link>
                     </td>
                   </tr>

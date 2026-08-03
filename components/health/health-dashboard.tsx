@@ -119,9 +119,13 @@ export function HealthDashboard() {
       <div className="mx-auto max-w-3xl px-4 py-8">
         <div className="mb-6 flex items-center justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-white">System Health</h1>
+            <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-cyan-300/30 bg-cyan-400/10 px-3 py-1 text-xs text-cyan-200">
+              <Activity className="size-3.5" />
+              Thinkbit · Oil Tax
+            </div>
+            <h1 className="text-2xl font-semibold tracking-tight text-white">สุขภาพระบบ</h1>
             <p className="mt-1 text-xs text-slate-400">
-              Runtime checks for Cosmos, Blob Storage, and local cache.
+              ตรวจสถานะ Cosmos, Blob Storage และ local cache
             </p>
           </div>
           <Button

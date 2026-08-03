@@ -124,7 +124,7 @@ export function buildCosmosSearchHref(
   }
 
   const query = params.toString()
-  return query ? `/doc-workbench?${query}` : "/doc-workbench"
+  return query ? `/docs?${query}` : "/docs"
 }
 
 export type ResolvedCosmosInitialFilter = {

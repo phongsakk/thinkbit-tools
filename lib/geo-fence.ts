@@ -173,6 +173,7 @@ export function evaluateGeoFence(
 /** Paths that stay reachable without a valid geofence cookie. */
 export function isGeoFencePublicPath(pathname: string): boolean {
   if (pathname === "/") return true
+  if (pathname === "/auth") return true
   if (pathname.startsWith("/api/geo")) return true
   if (pathname === "/api/ping") return true
   if (pathname === "/api/health") return true

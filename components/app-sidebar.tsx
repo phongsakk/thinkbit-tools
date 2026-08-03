@@ -7,10 +7,10 @@ import { Database, FileText, Home, Upload } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const NAV_ITEMS = [
-  { href: "/", label: "Home", icon: Home },
-  { href: "/doc-workbench", label: "Doc Workbench", icon: Database },
-  { href: "/upload-history", label: "Upload History", icon: Upload },
-  { href: "/pdf", label: "PDF Cache", icon: FileText },
+  { href: "/", label: "หน้าหลัก", icon: Home },
+  { href: "/upload-batches", label: "ชุดอัปโหลด", icon: Upload },
+  { href: "/docs", label: "โต๊ะเอกสาร", icon: Database },
+  { href: "/pdf-cache", label: "คลัง PDF", icon: FileText },
 ] as const
 
 export function AppSidebar() {
