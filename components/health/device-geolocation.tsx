@@ -14,6 +14,7 @@ import {
 
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
+import { resolveGeoAuthRedirect } from "@/lib/geo-fence"
 import { cn } from "@/lib/utils"
 
 type GeoState =
@@ -150,10 +151,8 @@ export function DeviceGeolocation() {
         }
         setVerify(nextVerify)
 
-        if (data.allowed && nextPath && nextPath.startsWith("/")) {
-          router.replace(nextPath)
-        } else if (data.allowed && geoRequired) {
-          router.replace("/")
+        if (data.allowed) {
+          router.replace(resolveGeoAuthRedirect(nextPath))
         }
       } catch (err) {
         setVerify({
@@ -162,7 +161,7 @@ export function DeviceGeolocation() {
         })
       }
     },
-    [geoRequired, nextPath, router]
+    [nextPath, router]
   )
 
   const clearGeoSession = useCallback(async () => {
@@ -240,15 +239,8 @@ export function DeviceGeolocation() {
             })
           }
           if (data.enabled && data.allowed && data.grant) {
-            setVerify({
-              status: "done",
-              enabled: true,
-              allowed: true,
-              distanceMeters: data.grant.distanceMeters,
-              radiusMeters: data.radiusMeters,
-              expiresAt: data.grant.expiresAt,
-              message: "Within geofence — access granted",
-            })
+            router.replace(resolveGeoAuthRedirect(nextPath))
+            return
           }
         } catch {
           // ignore status prefetch errors
@@ -257,7 +249,7 @@ export function DeviceGeolocation() {
       })()
     }, 0)
     return () => window.clearTimeout(timer)
-  }, [readLocation])
+  }, [nextPath, readLocation, router])
 
   useEffect(() => {
     if (typeof navigator === "undefined" || !navigator.permissions?.query) return

@@ -170,6 +170,14 @@ export function evaluateGeoFence(
   }
 }
 
+/** Safe post-auth destination: `next` query if same-origin path, else home. */
+export function resolveGeoAuthRedirect(nextPath: string | null | undefined): string {
+  if (!nextPath) return "/"
+  if (!nextPath.startsWith("/") || nextPath.startsWith("//")) return "/"
+  if (nextPath === "/auth" || nextPath.startsWith("/auth?")) return "/"
+  return nextPath
+}
+
 /** Paths that stay reachable without a valid geofence cookie. */
 export function isGeoFencePublicPath(pathname: string): boolean {
   if (pathname === "/") return true

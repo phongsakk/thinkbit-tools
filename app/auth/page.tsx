@@ -1,19 +1,51 @@
 import type { Metadata } from "next"
 import { Suspense } from "react"
 import Link from "next/link"
+import { cookies } from "next/headers"
+import { redirect } from "next/navigation"
 import { ShieldCheck } from "lucide-react"
 
 import {
   DeviceGeolocation,
   DeviceGeolocationSkeleton,
 } from "@/components/health/device-geolocation"
+import {
+  GEO_FENCE_COOKIE,
+  getGeoFenceConfig,
+  isGeoFenceEnabled,
+  resolveGeoAuthRedirect,
+  verifyGeoFenceCookieValue,
+} from "@/lib/geo-fence"
 
 export const metadata: Metadata = {
   title: "ยืนยันตำแหน่ง",
   description: "ตรวจสอบตำแหน่งเพื่อเปิด session เข้าใช้งานเครื่องมือ",
 }
 
-export default function AuthPage() {
+export default async function AuthPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>
+}) {
+  const sp = (await searchParams) ?? {}
+  const nextRaw = sp.next
+  const nextPath = typeof nextRaw === "string" ? nextRaw : undefined
+
+  // Already have a valid geofence session → leave /auth immediately.
+  if (isGeoFenceEnabled()) {
+    const config = getGeoFenceConfig()
+    if (config) {
+      const jar = await cookies()
+      const grant = await verifyGeoFenceCookieValue(
+        jar.get(GEO_FENCE_COOKIE)?.value,
+        config.secret
+      )
+      if (grant) {
+        redirect(resolveGeoAuthRedirect(nextPath))
+      }
+    }
+  }
+
   return (
     <div className="min-h-svh bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 text-slate-200">
       <div className="mx-auto flex min-h-svh max-w-lg flex-col justify-center px-4 py-10">

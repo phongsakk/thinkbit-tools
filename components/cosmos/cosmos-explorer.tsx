@@ -580,7 +580,7 @@ export function DocWorkbench({
     return `/download/blob/${encodeURIComponent(selectedId)}#toolbar=0&navpanes=0&scrollbar=1`
   }, [blobSource, pageCacheMap, selectedId])
 
-  const showTablePdf = Boolean(document && pdfEmbedSrc)
+  const showTablePdf = Boolean(pdfEmbedSrc)
   const prepareResultForDisplay = useMemo(() => {
     if (!prepareResult) return null
     if (!("url" in prepareResult)) return prepareResult
@@ -661,20 +661,82 @@ export function DocWorkbench({
       setBlobSource(null)
 
       if (!selectedId) return
+      const targetId = selectedId
 
       void (async () => {
         try {
           const response = await fetch(
-            `/api/cosmos/cache?documentId=${encodeURIComponent(selectedId)}`,
+            `/api/cosmos/cache?documentId=${encodeURIComponent(targetId)}`,
             { cache: "no-store" }
           )
           const data = await readApiPayload<CacheStatusResponse>(response)
           if (cancelled || !response.ok) return
-          setDocumentSource(data.document ?? null)
-          setPrepareSource(data.prepare ?? null)
-          setBlobSource(data.blob ?? null)
+
+          const hasDocument = data.document === "cache"
+          const hasPrepare = data.prepare === "cache"
+          const hasBlob = data.blob === "cache"
+
+          setDocumentSource(hasDocument ? "cache" : null)
+          setPrepareSource(hasPrepare ? "cache" : null)
+          setBlobSource(hasBlob ? "cache" : null)
+
+          if (!hasDocument && !hasPrepare && !hasBlob) return
+
+          const loaded: string[] = []
+
+          await Promise.all([
+            hasDocument
+              ? (async () => {
+                  setFetchingDocument(true)
+                  try {
+                    const itemResponse = await fetch(
+                      `/api/cosmos/item/${encodeURIComponent(targetId)}`,
+                      { cache: "no-store" }
+                    )
+                    const itemData = await readApiPayload<ItemResponse>(itemResponse)
+                    if (cancelled || !itemResponse.ok || !itemData.item) return
+                    setDocument(itemData.item)
+                    setDocumentSource(itemData.source ?? "cache")
+                    loaded.push("data")
+                  } finally {
+                    if (!cancelled) setFetchingDocument(false)
+                  }
+                })()
+              : Promise.resolve(),
+            hasPrepare
+              ? (async () => {
+                  setPreparing(true)
+                  try {
+                    const prepResponse = await fetch("/api/cosmos/prepare", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ documentId: targetId }),
+                    })
+                    const prepData = await readApiPayload<PrepareResult>(prepResponse)
+                    if (
+                      cancelled ||
+                      !prepResponse.ok ||
+                      prepData.source !== "cache"
+                    ) {
+                      return
+                    }
+                    setPrepareResult(prepData)
+                    setPrepareSource("cache")
+                    loaded.push("prepare")
+                  } finally {
+                    if (!cancelled) setPreparing(false)
+                  }
+                })()
+              : Promise.resolve(),
+          ])
+
+          if (cancelled) return
+          if (hasBlob) loaded.push("pdf")
+          if (loaded.length > 0) {
+            setActionMessage(`Loaded from cache: ${loaded.join(" · ")}`)
+          }
         } catch {
-          // ignore status probe errors
+          // ignore status / cache hydrate errors
         }
       })()
     }, 0)
@@ -1718,17 +1780,49 @@ export function DocWorkbench({
                     ) : null}
                   </>
                 ) : (
-                  <div className="flex h-full items-center justify-center p-3 text-sm text-slate-500">
-                    {document
-                      ? "Fetch แล้ว — กด PDF เพื่อแสดงไฟล์"
-                      : "Select page then Fetch + PDF"}
+                  <div className="flex h-full flex-col items-center justify-center gap-3 p-3 text-sm text-slate-500">
+                    {!selectedId ? (
+                      <span>เลือกหน้าจากรายการซ้าย</span>
+                    ) : (
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={!selectedBlobFileName || cachingPdf}
+                        onClick={() => void handlePdf()}
+                        className="h-9 rounded-lg bg-cyan-500 px-4 text-slate-950 hover:bg-cyan-400"
+                      >
+                        {cachingPdf ? (
+                          <Loader2 className="size-3.5 animate-spin" />
+                        ) : (
+                          <FileText className="size-3.5" />
+                        )}
+                        โหลด PDF
+                      </Button>
+                    )}
                   </div>
                 )
               ) : document ? (
                 <JsonViewer value={document} />
               ) : (
-                <div className="flex h-full items-center justify-center text-sm text-slate-500">
-                  Select page and click Fetch to view JSON
+                <div className="flex h-full flex-col items-center justify-center gap-3 p-3 text-sm text-slate-500">
+                  {!selectedId ? (
+                    <span>เลือกหน้าจากรายการซ้าย</span>
+                  ) : (
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={fetchingDocument}
+                      onClick={() => void handleFetchDocument()}
+                      className="h-9 rounded-lg bg-cyan-500 px-4 text-slate-950 hover:bg-cyan-400"
+                    >
+                      {fetchingDocument ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <CloudDownload className="size-3.5" />
+                      )}
+                      โหลด Raw
+                    </Button>
+                  )}
                 </div>
               )}
             </div>
@@ -1772,15 +1866,49 @@ export function DocWorkbench({
                     }
                   />
                 ) : (
-                  <div className="flex h-full items-center justify-center p-3 text-sm text-slate-500">
-                    กด Prepare เพื่อแสดงผลเป็นตาราง
+                  <div className="flex h-full flex-col items-center justify-center gap-3 p-3 text-sm text-slate-500">
+                    {!selectedId ? (
+                      <span>เลือกหน้าจากรายการซ้าย</span>
+                    ) : (
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={preparing}
+                        onClick={() => void handlePrepare()}
+                        className="h-9 rounded-lg bg-cyan-500 px-4 text-slate-950 hover:bg-cyan-400"
+                      >
+                        {preparing ? (
+                          <Loader2 className="size-3.5 animate-spin" />
+                        ) : (
+                          <WandSparkles className="size-3.5" />
+                        )}
+                        โหลด Prepare
+                      </Button>
+                    )}
                   </div>
                 )
               ) : prepareResultForDisplay ? (
                 <JsonViewer value={prepareResultForDisplay} />
               ) : (
-                <div className="flex h-full items-center justify-center p-3 text-sm text-slate-500">
-                  Result will appear here
+                <div className="flex h-full flex-col items-center justify-center gap-3 p-3 text-sm text-slate-500">
+                  {!selectedId ? (
+                    <span>เลือกหน้าจากรายการซ้าย</span>
+                  ) : (
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={preparing}
+                      onClick={() => void handlePrepare()}
+                      className="h-9 rounded-lg bg-cyan-500 px-4 text-slate-950 hover:bg-cyan-400"
+                    >
+                      {preparing ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <WandSparkles className="size-3.5" />
+                      )}
+                      โหลด Prepare
+                    </Button>
+                  )}
                 </div>
               )}
             </div>
