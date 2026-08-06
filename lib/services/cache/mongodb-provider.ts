@@ -4,6 +4,7 @@ import type {
   BlobCacheDocument,
   CacheKind,
   JsonCacheDocument,
+  JsonCacheKind,
   ManifestEntry,
   ManifestFile,
 } from "./types"
@@ -14,25 +15,42 @@ import {
   normalizeBlobFileNames,
   toBuffer,
 } from "./helpers"
+import { cacheKindUsesTtl, isCacheEntryFresh, makeCacheTimestamps } from "./ttl"
 
-const COLLECTION = {
+const COLLECTION: Record<CacheKind, string> = {
   cosmos: "cache_cosmos",
   prepare: "cache_prepare",
   blob: "cache_blob",
-} as const
+  "cosmos-query": "cache_cosmos_query",
+  "upload-history": "cache_upload_history",
+}
 
 async function getDb(): Promise<Db> {
   return getMongoDb()
 }
 
+let indexesPromise: Promise<void> | null = null
+
+async function ensureIndexesOnce() {
+  if (!indexesPromise) {
+    indexesPromise = ensureCacheIndexes().catch((error) => {
+      indexesPromise = null
+      throw error
+    })
+  }
+  await indexesPromise
+}
+
 async function jsonCollection(
-  kind: "cosmos" | "prepare"
+  kind: JsonCacheKind
 ): Promise<Collection<JsonCacheDocument>> {
+  await ensureIndexesOnce()
   const db = await getDb()
   return db.collection<JsonCacheDocument>(COLLECTION[kind])
 }
 
 async function blobCollection(): Promise<Collection<BlobCacheDocument>> {
+  await ensureIndexesOnce()
   const db = await getDb()
   return db.collection<BlobCacheDocument>(COLLECTION.blob)
 }
@@ -40,6 +58,7 @@ async function blobCollection(): Promise<Collection<BlobCacheDocument>> {
 function entryFromJsonDoc(doc: JsonCacheDocument): ManifestEntry {
   return {
     savedAt: doc.savedAt,
+    expiresAt: doc.expiresAt,
     fileName: doc.fileName,
     docType: doc.docType,
     url: doc.url,
@@ -49,6 +68,7 @@ function entryFromJsonDoc(doc: JsonCacheDocument): ManifestEntry {
 function entryFromBlobDoc(doc: BlobCacheDocument): ManifestEntry {
   return {
     savedAt: doc.savedAt,
+    expiresAt: doc.expiresAt,
     fileName: doc.fileName,
     contentType: doc.contentType,
     blobFileName: normalizeBlobFileNames(doc.blobFileName),
@@ -56,13 +76,28 @@ function entryFromBlobDoc(doc: BlobCacheDocument): ManifestEntry {
   }
 }
 
+function isJsonDocFresh(
+  kind: JsonCacheKind,
+  doc: Pick<JsonCacheDocument, "expiresAt" | "expireAt">
+) {
+  return isCacheEntryFresh(kind, doc.expiresAt ?? doc.expireAt)
+}
+
+function isBlobDocFresh(doc: Pick<BlobCacheDocument, "expiresAt" | "expireAt">) {
+  return isCacheEntryFresh("blob", doc.expiresAt ?? doc.expireAt)
+}
+
 export async function getJsonCache(
-  kind: "cosmos" | "prepare",
+  kind: JsonCacheKind,
   documentId: string
 ): Promise<{ data: Record<string, unknown>; entry: ManifestEntry } | null> {
   const col = await jsonCollection(kind)
   const doc = await col.findOne({ _id: documentId })
   if (!doc?.data || typeof doc.data !== "object") return null
+  if (!isJsonDocFresh(kind, doc)) {
+    void col.deleteOne({ _id: documentId }).catch(() => {})
+    return null
+  }
   return {
     data: doc.data,
     entry: entryFromJsonDoc(doc),
@@ -70,16 +105,17 @@ export async function getJsonCache(
 }
 
 export async function saveJsonCache(
-  kind: "cosmos" | "prepare",
+  kind: JsonCacheKind,
   documentId: string,
   data: Record<string, unknown>,
   meta?: { docType?: string; url?: string }
 ): Promise<ManifestEntry> {
   const col = await jsonCollection(kind)
-  const savedAt = new Date().toISOString()
+  const timestamps = makeCacheTimestamps(kind)
   const fileName = `${documentId}.json`
   const entry: ManifestEntry = {
-    savedAt,
+    savedAt: timestamps.savedAt,
+    expiresAt: timestamps.expiresAt,
     fileName,
     docType: meta?.docType,
     url: meta?.url,
@@ -92,7 +128,9 @@ export async function saveJsonCache(
         _id: documentId,
         kind,
         fileName,
-        savedAt,
+        savedAt: timestamps.savedAt,
+        expiresAt: timestamps.expiresAt,
+        expireAt: timestamps.expireAt,
         docType: meta?.docType,
         url: meta?.url,
         data,
@@ -104,16 +142,13 @@ export async function saveJsonCache(
   return entry
 }
 
-export async function deleteJsonCache(
-  kind: "cosmos" | "prepare",
-  documentId: string
-) {
+export async function deleteJsonCache(kind: JsonCacheKind, documentId: string) {
   const col = await jsonCollection(kind)
   await col.deleteOne({ _id: documentId })
 }
 
 export async function getJsonCacheMeta(
-  kind: "cosmos" | "prepare",
+  kind: JsonCacheKind,
   documentId: string
 ): Promise<ManifestEntry | null> {
   const col = await jsonCollection(kind)
@@ -122,25 +157,32 @@ export async function getJsonCacheMeta(
     { projection: { data: 0 } }
   )
   if (!doc) return null
+  if (!isJsonDocFresh(kind, doc)) {
+    void col.deleteOne({ _id: documentId }).catch(() => {})
+    return null
+  }
   return entryFromJsonDoc(doc)
 }
 
-export async function hasJsonCache(
-  kind: "cosmos" | "prepare",
-  documentId: string
-) {
-  const col = await jsonCollection(kind)
-  const doc = await col.findOne({ _id: documentId }, { projection: { _id: 1 } })
-  return Boolean(doc)
+export async function hasJsonCache(kind: JsonCacheKind, documentId: string) {
+  return Boolean(await getJsonCacheMeta(kind, documentId))
 }
 
-export async function countJsonCache(kind: "cosmos" | "prepare") {
+export async function countJsonCache(kind: JsonCacheKind) {
   const col = await jsonCollection(kind)
-  return col.countDocuments()
+  if (!cacheKindUsesTtl(kind)) {
+    return col.countDocuments()
+  }
+  return col.countDocuments({
+    $or: [
+      { expiresAt: { $gt: new Date().toISOString() } },
+      { expireAt: { $gt: new Date() } },
+    ],
+  })
 }
 
 export async function getJsonManifest(
-  kind: "cosmos" | "prepare"
+  kind: JsonCacheKind
 ): Promise<ManifestFile> {
   const col = await jsonCollection(kind)
   const docs = await col
@@ -151,6 +193,8 @@ export async function getJsonManifest(
           _id: 1,
           fileName: 1,
           savedAt: 1,
+          expiresAt: 1,
+          expireAt: 1,
           docType: 1,
           url: 1,
         },
@@ -160,8 +204,10 @@ export async function getJsonManifest(
 
   const entries: Record<string, ManifestEntry> = {}
   for (const doc of docs) {
+    if (!isJsonDocFresh(kind, doc)) continue
     entries[doc._id] = {
       savedAt: doc.savedAt,
+      expiresAt: doc.expiresAt,
       fileName: doc.fileName || `${doc._id}.json`,
       docType: doc.docType,
       url: doc.url,
@@ -182,6 +228,11 @@ export async function getBlobCache(fileName: string): Promise<{
   const doc = await col.findOne({ _id: resolved })
   if (!doc) return null
 
+  if (!isBlobDocFresh(doc)) {
+    void col.deleteOne({ _id: resolved }).catch(() => {})
+    return null
+  }
+
   const buffer = toBuffer(doc.data)
   if (!buffer) return null
 
@@ -201,6 +252,10 @@ export async function getBlobCacheMeta(
     { projection: { data: 0 } }
   )
   if (!doc) return null
+  if (!isBlobDocFresh(doc as BlobCacheDocument)) {
+    void col.deleteOne({ _id: fileName }).catch(() => {})
+    return null
+  }
   return entryFromBlobDoc(doc as BlobCacheDocument)
 }
 
@@ -209,10 +264,15 @@ export async function listBlobCacheMeta(): Promise<
 > {
   const col = await blobCollection()
   const docs = await col.find({}, { projection: { data: 0 } }).toArray()
-  return docs.map((doc) => ({
-    fileName: doc.fileName || doc._id,
-    entry: entryFromBlobDoc(doc as BlobCacheDocument),
-  }))
+  const items: Array<{ fileName: string; entry: ManifestEntry }> = []
+  for (const doc of docs) {
+    if (!isBlobDocFresh(doc as BlobCacheDocument)) continue
+    items.push({
+      fileName: doc.fileName || doc._id,
+      entry: entryFromBlobDoc(doc as BlobCacheDocument),
+    })
+  }
+  return items
 }
 
 export async function getBlobManifest(): Promise<ManifestFile> {
@@ -239,6 +299,10 @@ export async function findBlobByDocumentId(documentId: string): Promise<{
     { projection: { data: 0 } }
   )
   if (!doc) return null
+  if (!isBlobDocFresh(doc as BlobCacheDocument)) {
+    void col.deleteOne({ _id: doc._id }).catch(() => {})
+    return null
+  }
   return {
     fileName: doc.fileName || doc._id,
     entry: entryFromBlobDoc(doc as BlobCacheDocument),
@@ -260,7 +324,7 @@ export async function saveBlobCache(
     { projection: { data: 0 } }
   )
 
-  const savedAt = new Date().toISOString()
+  const timestamps = makeCacheTimestamps("blob")
   const contentType =
     meta.contentType && meta.contentType !== "application/octet-stream"
       ? meta.contentType
@@ -273,7 +337,8 @@ export async function saveBlobCache(
   const documentIds = mergeDocumentIds(existing?.documentIds, meta.documentIds)
 
   const entry: ManifestEntry = {
-    savedAt,
+    savedAt: timestamps.savedAt,
+    expiresAt: timestamps.expiresAt,
     fileName,
     contentType,
     blobFileName,
@@ -286,7 +351,9 @@ export async function saveBlobCache(
       $set: {
         _id: fileName,
         fileName,
-        savedAt,
+        savedAt: timestamps.savedAt,
+        expiresAt: timestamps.expiresAt,
+        expireAt: timestamps.expireAt,
         contentType,
         blobFileName,
         documentIds,
@@ -303,6 +370,7 @@ export async function updateBlobCacheMeta(
   fileName: string,
   patch: {
     savedAt?: string
+    expiresAt?: string
     contentType?: string
     blobFileName?: string[]
     documentIds?: string[]
@@ -315,8 +383,17 @@ export async function updateBlobCacheMeta(
   )
   if (!existing) return null
 
+  const timestamps = patch.savedAt
+    ? makeCacheTimestamps("blob", new Date(Date.parse(patch.savedAt) || Date.now()))
+    : makeCacheTimestamps("blob")
+
+  // Prefer explicit patch.expiresAt only when kind uses TTL (blob does not).
+  const expiresAt = timestamps.expiresAt
+  const expireAt = timestamps.expireAt
+
   const next: ManifestEntry = {
-    savedAt: patch.savedAt || existing.savedAt || new Date().toISOString(),
+    savedAt: timestamps.savedAt,
+    expiresAt,
     fileName,
     contentType: patch.contentType || existing.contentType,
     blobFileName: patch.blobFileName
@@ -332,6 +409,8 @@ export async function updateBlobCacheMeta(
     {
       $set: {
         savedAt: next.savedAt,
+        expiresAt,
+        expireAt,
         contentType: next.contentType,
         blobFileName: next.blobFileName,
         documentIds: next.documentIds,
@@ -458,13 +537,25 @@ export async function flushCacheKind(
 }
 
 export async function ensureCacheIndexes() {
-  const cosmos = await jsonCollection("cosmos")
-  const prepare = await jsonCollection("prepare")
-  const blob = await blobCollection()
+  const db = await getDb()
+  const kinds: JsonCacheKind[] = [
+    "cosmos",
+    "prepare",
+    "cosmos-query",
+    "upload-history",
+  ]
+  const blob = db.collection<BlobCacheDocument>(COLLECTION.blob)
 
   await Promise.all([
-    cosmos.createIndex({ savedAt: -1 }),
-    prepare.createIndex({ savedAt: -1 }),
+    ...kinds.map(async (kind) => {
+      const col = db.collection<JsonCacheDocument>(COLLECTION[kind])
+      const jobs = [col.createIndex({ savedAt: -1 })]
+      // Only upload-history auto-expires; /docs kinds keep forever.
+      if (cacheKindUsesTtl(kind)) {
+        jobs.push(col.createIndex({ expireAt: 1 }, { expireAfterSeconds: 0 }))
+      }
+      await Promise.all(jobs)
+    }),
     blob.createIndex({ documentIds: 1 }),
     blob.createIndex({ savedAt: -1 }),
   ])

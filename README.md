@@ -116,7 +116,7 @@ tree: batch(unixtime) → DOC#### → page
 1. **SSR** อ่าน filter จาก query → โหลดผลค้นหาเริ่มต้น
 2. **Filter fields:** `unixtime` (like), `id`, `docType`, `documentGroup`
 3. **Actions ต่อ page:** Fetch, Prepare, PDF, OCR, Cache, Flush; Zip ต่อ DOC
-4. **Cache ลงดิสก์:** `download/cosmos/`, `download/prepare/`, `download/blob/`
+4. **Cache:** MongoDB — `/docs` kinds (`cosmos` / `prepare` / `blob` / `cosmos-query`) ไม่หมดอายุ; `upload-history` มี TTL (default 1 ชม., `CACHE_TTL_MS`)
 5. Deep-link จากเครื่องมืออื่น: `?unixtime=` (ชุดอัปโหลด), `?id=` (คลัง PDF)
 
 ### Query params
@@ -209,7 +209,7 @@ parse path → timestamp + factory_id + ช่วงธุรกรรม
 จัดกลุ่ม (group) ตาม timestamp × factory × period
         │
         ▼
-cache ลงไฟล์ (download/upload-history/)
+cache ลง MongoDB (`cache_upload_history`, TTL)
         │
         ▼
 SSR แสดงตาราง + filter ผ่าน query params
@@ -219,7 +219,7 @@ SSR แสดงตาราง + filter ผ่าน query params
 2. **แกะ metadata จาก `blobFileName`** → `timestamp`, `factory_id`, `transaction_period`
 3. **จัดกลุ่ม** ตาม timestamp × factory × period
 4. **Filter:** `from_time` / `to_time` / `warehouse` / `fresh=1`
-5. **Cache** ที่ `download/upload-history/` (+ warehouse/search manifests)
+5. **Cache** ใน MongoDB collection `cache_upload_history` (+ warehouse/search manifests) — TTL (default 1 ชม., `CACHE_TTL_MS`); แยกจาก cache ของ `/docs` ที่ไม่หมดอายุ
 
 ### API / ไฟล์สำคัญ
 

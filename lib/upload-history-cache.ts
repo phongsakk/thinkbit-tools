@@ -1,5 +1,10 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises"
-import path from "node:path"
+import {
+  getJsonCache,
+  makeCacheTimestamps,
+  saveJsonCache,
+  storageRef,
+} from "@/lib/services/cache"
+import { isCacheFresh } from "@/lib/services/cache/ttl"
 
 export type UploadHistoryGroup = {
   timestamp: string
@@ -19,38 +24,13 @@ export type UploadHistoryPayload = {
   source?: "cache" | "fresh"
 }
 
+/** @deprecated use getCacheTtlMs / DEFAULT_CACHE_TTL_MS from cache service */
 export const UPLOAD_HISTORY_TTL_MS = 60 * 60 * 1000
-export const UPLOAD_HISTORY_FILE = "latest.json"
 export const UPLOAD_HISTORY_VERSION = 3 as const
-export const UPLOAD_HISTORY_WAREHOUSE_MANIFEST_FILE = "warehouse-manifest.json"
 export const UPLOAD_HISTORY_NOFILTER_CACHE_KEY = "nofilter"
-export const UPLOAD_HISTORY_SEARCH_MANIFEST_FILE = "search-manifest.json"
 
-function getUploadHistoryDir() {
-  const configuredRoot = process.env.LOCAL_CACHE_DIR?.trim()
-  if (configuredRoot) {
-    return path.join(configuredRoot, "upload-history")
-  }
-  if (process.env.VERCEL) {
-    return path.join("/tmp", "thinkbit-tools", "download", "upload-history")
-  }
-  return path.join(process.cwd(), "download", "upload-history")
-}
-
-function getUploadHistoryPath(cacheKey = UPLOAD_HISTORY_NOFILTER_CACHE_KEY) {
-  if (cacheKey === UPLOAD_HISTORY_NOFILTER_CACHE_KEY) {
-    return path.join(getUploadHistoryDir(), UPLOAD_HISTORY_FILE)
-  }
-  return path.join(getUploadHistoryDir(), `latest__${cacheKey}.json`)
-}
-
-function getWarehouseManifestPath() {
-  return path.join(getUploadHistoryDir(), UPLOAD_HISTORY_WAREHOUSE_MANIFEST_FILE)
-}
-
-function getSearchManifestPath() {
-  return path.join(getUploadHistoryDir(), UPLOAD_HISTORY_SEARCH_MANIFEST_FILE)
-}
+const WAREHOUSE_MANIFEST_ID = "__warehouse_manifest__"
+const SEARCH_MANIFEST_ID = "__search_manifest__"
 
 export type UploadPathMeta = {
   timestamp: string
@@ -110,9 +90,6 @@ function parseTransactionPeriodLabel(code: string): string {
 /**
  * After the first `/` in blobFileName, parse
  * `{prefix}-{unixtime}-{factory_id}-{type}-{transactionCode}-...`
- * Example:
- * BANGCHAK-test/220769-1784714789647-B103-00-00001261-...
- * -> timestamp 1784714789647, factory_id B103, transaction_period "ทั้งเดือน ธันวาคม 2561"
  */
 export function extractUploadPathMeta(blobFileName: string): UploadPathMeta | null {
   const slash = blobFileName.indexOf("/")
@@ -121,7 +98,6 @@ export function extractUploadPathMeta(blobFileName: string): UploadPathMeta | nu
   const firstSegment = afterFirstSlash.split("/")[0] ?? ""
   const match = firstSegment.match(/^(\d+)-(\d{10,})-([A-Za-z0-9]+)-\d{2}-(\d{8})/)
   if (!match) {
-    // Fallback: timestamp only, factory unknown
     const tsOnly = firstSegment.match(/\b(\d{10,})\b/)
     if (!tsOnly?.[1]) return null
     return {
@@ -205,10 +181,6 @@ export function normalizeUploadHistoryFilters(
   }
 }
 
-async function ensureUploadHistoryDir() {
-  await mkdir(getUploadHistoryDir(), { recursive: true })
-}
-
 function isValidGroup(group: unknown): group is UploadHistoryGroup {
   if (!group || typeof group !== "object") return false
   const g = group as UploadHistoryGroup
@@ -223,28 +195,25 @@ function isValidGroup(group: unknown): group is UploadHistoryGroup {
 export async function readUploadHistoryCache(
   cacheKey = UPLOAD_HISTORY_NOFILTER_CACHE_KEY
 ): Promise<UploadHistoryPayload | null> {
-  try {
-    const raw = await readFile(getUploadHistoryPath(cacheKey), "utf8")
-    const parsed = JSON.parse(raw) as UploadHistoryPayload
-    if (
-      !parsed ||
-      parsed.version !== UPLOAD_HISTORY_VERSION ||
-      typeof parsed.savedAt !== "string" ||
-      typeof parsed.expiresAt !== "string" ||
-      !Array.isArray(parsed.groups) ||
-      !parsed.groups.every(isValidGroup)
-    ) {
-      return null
-    }
-    return parsed
-  } catch {
+  const cached = await getJsonCache("upload-history", cacheKey)
+  if (!cached) return null
+  const parsed = cached.data as Partial<UploadHistoryPayload>
+  if (
+    !parsed ||
+    parsed.version !== UPLOAD_HISTORY_VERSION ||
+    typeof parsed.savedAt !== "string" ||
+    typeof parsed.expiresAt !== "string" ||
+    !Array.isArray(parsed.groups) ||
+    !parsed.groups.every(isValidGroup)
+  ) {
     return null
   }
+  if (!isCacheFresh(parsed.expiresAt)) return null
+  return parsed as UploadHistoryPayload
 }
 
 export function isUploadHistoryFresh(cache: UploadHistoryPayload, now = Date.now()) {
-  const expires = Date.parse(cache.expiresAt)
-  return Number.isFinite(expires) && expires > now
+  return isCacheFresh(cache.expiresAt, now)
 }
 
 export async function writeUploadHistoryCache(input: {
@@ -255,31 +224,34 @@ export async function writeUploadHistoryCache(input: {
   savedAt?: string
   cacheKey?: string
 }): Promise<UploadHistoryPayload> {
-  const savedAt = input.savedAt ?? new Date().toISOString()
-  const expiresAt = new Date(Date.parse(savedAt) + UPLOAD_HISTORY_TTL_MS).toISOString()
+  const cacheKey = input.cacheKey ?? UPLOAD_HISTORY_NOFILTER_CACHE_KEY
+  const base = input.savedAt
+    ? makeCacheTimestamps(
+        "upload-history",
+        new Date(Date.parse(input.savedAt) || Date.now())
+      )
+    : makeCacheTimestamps("upload-history")
+  if (!base.expiresAt) {
+    throw new Error("upload-history cache requires TTL expiresAt")
+  }
   const payload: UploadHistoryPayload = {
     version: UPLOAD_HISTORY_VERSION,
-    savedAt,
-    expiresAt,
+    savedAt: base.savedAt,
+    expiresAt: base.expiresAt,
     groups: input.groups,
     totalItems: input.totalItems,
     requestCharge: input.requestCharge,
     truncated: input.truncated,
   }
 
-  await ensureUploadHistoryDir()
-  await writeFile(
-    getUploadHistoryPath(input.cacheKey),
-    JSON.stringify(payload, null, 2),
-    "utf8"
-  )
+  await saveJsonCache("upload-history", cacheKey, payload)
   return payload
 }
 
 export function getUploadHistoryStoragePath(
   cacheKey = UPLOAD_HISTORY_NOFILTER_CACHE_KEY
 ) {
-  return getUploadHistoryPath(cacheKey)
+  return storageRef("upload-history", cacheKey)
 }
 
 type WarehouseManifest = {
@@ -295,22 +267,15 @@ type SearchManifest = {
 }
 
 export async function readWarehouseManifest(): Promise<string[]> {
-  try {
-    const raw = await readFile(getWarehouseManifestPath(), "utf8")
-    const parsed = JSON.parse(raw) as WarehouseManifest
-    if (
-      !parsed ||
-      parsed.version !== 1 ||
-      !Array.isArray(parsed.warehouses)
-    ) {
-      return []
-    }
-    return parsed.warehouses
-      .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
-      .map((item) => item.trim())
-  } catch {
+  const cached = await getJsonCache("upload-history", WAREHOUSE_MANIFEST_ID)
+  if (!cached) return []
+  const parsed = cached.data as Partial<WarehouseManifest>
+  if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.warehouses)) {
     return []
   }
+  return parsed.warehouses
+    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    .map((item) => item.trim())
 }
 
 export async function mergeWarehouseManifest(found: string[]): Promise<string[]> {
@@ -323,13 +288,12 @@ export async function mergeWarehouseManifest(found: string[]): Promise<string[]>
     )
   ).sort((a, b) => a.localeCompare(b))
 
-  await ensureUploadHistoryDir()
   const payload: WarehouseManifest = {
     version: 1,
     warehouses: merged,
     updatedAt: new Date().toISOString(),
   }
-  await writeFile(getWarehouseManifestPath(), JSON.stringify(payload, null, 2), "utf8")
+  await saveJsonCache("upload-history", WAREHOUSE_MANIFEST_ID, payload)
   return merged
 }
 
@@ -366,19 +330,16 @@ function isSearchFilterEntry(entry: UploadHistorySearchEntry) {
 }
 
 export async function readSearchManifest(): Promise<UploadHistorySearchEntry[]> {
-  try {
-    const raw = await readFile(getSearchManifestPath(), "utf8")
-    const parsed = JSON.parse(raw) as SearchManifest
-    if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.entries)) {
-      return []
-    }
-    return parsed.entries
-      .map(normalizeSearchEntry)
-      .filter((entry): entry is UploadHistorySearchEntry => Boolean(entry))
-      .filter(isSearchFilterEntry)
-  } catch {
+  const cached = await getJsonCache("upload-history", SEARCH_MANIFEST_ID)
+  if (!cached) return []
+  const parsed = cached.data as Partial<SearchManifest>
+  if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.entries)) {
     return []
   }
+  return parsed.entries
+    .map(normalizeSearchEntry)
+    .filter((entry): entry is UploadHistorySearchEntry => Boolean(entry))
+    .filter(isSearchFilterEntry)
 }
 
 export async function upsertSearchManifest(
@@ -390,7 +351,6 @@ export async function upsertSearchManifest(
   const key = cacheKey ?? buildUploadHistoryCacheKey(normalized)
   const current = await readSearchManifest()
 
-  // Default view (ทุกคลัง · ไม่กำหนด → ไม่กำหนด) is not a filter result.
   if (
     key === UPLOAD_HISTORY_NOFILTER_CACHE_KEY ||
     !(normalized.fromTime || normalized.toTime || normalized.warehouses.length > 0)
@@ -415,7 +375,6 @@ export async function upsertSearchManifest(
     entries: merged,
     updatedAt: new Date().toISOString(),
   }
-  await ensureUploadHistoryDir()
-  await writeFile(getSearchManifestPath(), JSON.stringify(payload, null, 2), "utf8")
+  await saveJsonCache("upload-history", SEARCH_MANIFEST_ID, payload)
   return merged
 }

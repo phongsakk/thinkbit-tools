@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useTransition, type FormEvent } from "react"
+import { useEffect, useRef, useState, useTransition, type FormEvent } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Eraser, Loader2, RefreshCw, Search, Upload } from "lucide-react"
@@ -37,6 +37,22 @@ export type UploadHistoryPanelProps = {
   warehousesSelected: string[]
   groups: UploadGroup[]
   warehouses: string[]
+  requestCharge?: number | null
+  source?: "cache" | "fresh"
+  savedAt?: string
+  cacheKey?: string
+  searchHistory?: SearchHistoryEntry[]
+  error?: string
+  /** When true, show empty/loading and fetch /api/cosmos/upload-history */
+  needsClientFetch?: boolean
+  /** Pass fresh=1 to the client API fetch */
+  forceFresh?: boolean
+}
+
+type UploadHistoryApiResponse = {
+  ok?: boolean
+  groups?: UploadGroup[]
+  warehouses?: string[]
   requestCharge?: number | null
   source?: "cache" | "fresh"
   savedAt?: string
@@ -104,18 +120,36 @@ function TableSkeleton({ rows = 8 }: { rows?: number }) {
   )
 }
 
+async function readApiPayload(response: Response): Promise<UploadHistoryApiResponse> {
+  const text = await response.text()
+  if (!text) return {}
+  try {
+    return JSON.parse(text) as UploadHistoryApiResponse
+  } catch {
+    const trimmed = text.trim()
+    if (trimmed.startsWith("<!DOCTYPE") || trimmed.startsWith("<html")) {
+      return { error: `Unexpected HTML response (${response.status})` }
+    }
+    return {
+      error: trimmed.slice(0, 300) || `Unexpected response (${response.status})`,
+    }
+  }
+}
+
 export function UploadHistoryPanel({
   fromTime,
   toTime,
   warehousesSelected,
-  groups,
-  warehouses,
-  requestCharge,
-  source,
-  savedAt,
-  cacheKey,
-  searchHistory = [],
-  error,
+  groups: initialGroups,
+  warehouses: initialWarehouses,
+  requestCharge: initialRequestCharge,
+  source: initialSource,
+  savedAt: initialSavedAt,
+  cacheKey: initialCacheKey,
+  searchHistory: initialSearchHistory = [],
+  error: initialError,
+  needsClientFetch = false,
+  forceFresh = false,
 }: UploadHistoryPanelProps) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
@@ -123,11 +157,104 @@ export function UploadHistoryPanel({
   const [toValue, setToValue] = useState(toDateTimeLocalValue(toTime))
   const [warehouseValue, setWarehouseValue] = useState(warehousesSelected)
 
+  const [groups, setGroups] = useState(initialGroups)
+  const [warehouses, setWarehouses] = useState(initialWarehouses)
+  const [requestCharge, setRequestCharge] = useState(initialRequestCharge)
+  const [source, setSource] = useState(initialSource)
+  const [savedAt, setSavedAt] = useState(initialSavedAt)
+  const [cacheKey, setCacheKey] = useState(initialCacheKey)
+  const [searchHistory, setSearchHistory] = useState(initialSearchHistory)
+  const [error, setError] = useState(initialError)
+  const [isFetching, setIsFetching] = useState(needsClientFetch)
+  const fetchGen = useRef(0)
+
   useEffect(() => {
     setFromValue(toDateTimeLocalValue(fromTime))
     setToValue(toDateTimeLocalValue(toTime))
     setWarehouseValue(warehousesSelected)
   }, [fromTime, toTime, warehousesSelected])
+
+  useEffect(() => {
+    if (needsClientFetch) return
+    setGroups(initialGroups)
+    setWarehouses(initialWarehouses)
+    setRequestCharge(initialRequestCharge)
+    setSource(initialSource)
+    setSavedAt(initialSavedAt)
+    setCacheKey(initialCacheKey)
+    setSearchHistory(initialSearchHistory)
+    setError(initialError)
+    setIsFetching(false)
+  }, [
+    needsClientFetch,
+    initialGroups,
+    initialWarehouses,
+    initialRequestCharge,
+    initialSource,
+    initialSavedAt,
+    initialCacheKey,
+    initialSearchHistory,
+    initialError,
+  ])
+
+  const warehousesKey = warehousesSelected.join("\0")
+
+  useEffect(() => {
+    if (!needsClientFetch) return
+
+    const gen = ++fetchGen.current
+    let cancelled = false
+
+    async function load() {
+      setIsFetching(true)
+      setError(undefined)
+      setGroups([])
+
+      try {
+        const params = new URLSearchParams()
+        if (fromTime) params.set("from_time", fromTime)
+        if (toTime) params.set("to_time", toTime)
+        for (const warehouse of warehousesSelected) {
+          if (warehouse) params.append("warehouse", warehouse)
+        }
+        if (forceFresh) params.set("fresh", "1")
+
+        const response = await fetch(`/api/cosmos/upload-history?${params.toString()}`, {
+          cache: "no-store",
+        })
+        const payload = await readApiPayload(response)
+
+        if (cancelled || gen !== fetchGen.current) return
+
+        if (!response.ok || payload.error) {
+          setError(payload.error ?? `Failed to load upload batches (${response.status})`)
+          setGroups([])
+          return
+        }
+
+        setGroups(payload.groups ?? [])
+        if (payload.warehouses) setWarehouses(payload.warehouses)
+        setRequestCharge(payload.requestCharge ?? null)
+        setSource(payload.source)
+        setSavedAt(payload.savedAt)
+        setCacheKey(payload.cacheKey)
+        if (payload.searchHistory) setSearchHistory(payload.searchHistory)
+      } catch (err) {
+        if (cancelled || gen !== fetchGen.current) return
+        setError(err instanceof Error ? err.message : "Failed to load upload batches")
+        setGroups([])
+      } finally {
+        if (!cancelled && gen === fetchGen.current) setIsFetching(false)
+      }
+    }
+
+    void load()
+    return () => {
+      cancelled = true
+    }
+    // warehousesSelected is represented by warehousesKey for a stable dep.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
+  }, [needsClientFetch, forceFresh, fromTime, toTime, warehousesKey])
 
   function navigate(href: string) {
     startTransition(() => {
@@ -161,6 +288,7 @@ export function UploadHistoryPanel({
     navigate("/upload-batches")
   }
 
+  const busy = isPending || isFetching
   const inputClass =
     "h-9 rounded-md border border-slate-600 bg-slate-900 px-2 text-sm text-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
 
@@ -183,10 +311,10 @@ export function UploadHistoryPanel({
             variant="outline"
             className="h-9 border-slate-500 bg-slate-800/80 px-3 text-slate-100 hover:bg-slate-700"
             type="button"
-            disabled={isPending}
+            disabled={busy}
             onClick={onRefresh}
           >
-            {isPending ? (
+            {busy ? (
               <Loader2 className="size-3.5 animate-spin" />
             ) : (
               <RefreshCw className="size-3.5" />
@@ -205,7 +333,7 @@ export function UploadHistoryPanel({
               type="datetime-local"
               value={fromValue}
               onChange={(e) => setFromValue(e.target.value)}
-              disabled={isPending}
+              disabled={busy}
               className={inputClass}
             />
           </label>
@@ -215,7 +343,7 @@ export function UploadHistoryPanel({
               type="datetime-local"
               value={toValue}
               onChange={(e) => setToValue(e.target.value)}
-              disabled={isPending}
+              disabled={busy}
               className={inputClass}
             />
           </label>
@@ -224,7 +352,7 @@ export function UploadHistoryPanel({
             <WarehouseSearchSelect
               value={warehouseValue}
               warehouses={warehouses}
-              disabled={isPending}
+              disabled={busy}
               onChange={setWarehouseValue}
             />
           </label>
@@ -232,10 +360,10 @@ export function UploadHistoryPanel({
             <Button
               type="submit"
               size="sm"
-              disabled={isPending}
+              disabled={busy}
               className="h-9 bg-cyan-500 text-slate-950 hover:bg-cyan-400"
             >
-              {isPending ? (
+              {busy ? (
                 <Loader2 className="size-3.5 animate-spin" />
               ) : (
                 <Search className="size-3.5" />
@@ -246,7 +374,7 @@ export function UploadHistoryPanel({
               type="button"
               size="sm"
               variant="outline"
-              disabled={isPending}
+              disabled={busy}
               onClick={onClear}
               className="h-9 border-slate-600 bg-slate-900 px-3 text-slate-100 hover:bg-slate-800"
             >
@@ -270,7 +398,7 @@ export function UploadHistoryPanel({
                   <button
                     key={entry.cacheKey}
                     type="button"
-                    disabled={isPending}
+                    disabled={busy}
                     onClick={() => navigate(href)}
                     className={cn(
                       "rounded-lg border px-2.5 py-1.5 text-left text-[11px] transition disabled:cursor-not-allowed disabled:opacity-50",
@@ -299,7 +427,7 @@ export function UploadHistoryPanel({
         ) : null}
 
         <div className="mb-3 flex flex-wrap gap-3 text-xs text-slate-400">
-          {isPending ? (
+          {busy ? (
             <span className="inline-flex items-center gap-1.5">
               <Loader2 className="size-3 animate-spin" />
               กำลังโหลด…
@@ -339,7 +467,7 @@ export function UploadHistoryPanel({
               </tr>
             </thead>
             <tbody>
-              {isPending ? (
+              {busy ? (
                 <TableSkeleton />
               ) : groups.length === 0 ? (
                 <tr>

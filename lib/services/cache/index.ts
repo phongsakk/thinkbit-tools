@@ -3,6 +3,7 @@ export type {
   CacheKind,
   CacheSource,
   CachedBlobListItem,
+  JsonCacheKind,
   ManifestEntry,
   ManifestFile,
 } from "./types"
@@ -10,6 +11,7 @@ export type {
 export {
   blobCacheMonthYearKey,
   buildBlobCacheFileName,
+  DEFAULT_CACHE_TTL_MS,
   flushCache,
   getBatchCacheStatus,
   getCacheStatus,
@@ -18,8 +20,13 @@ export {
   getCachedBlobSharingMonthYear,
   getCachedDocument,
   getCachedPrepare,
+  getCacheTtlMs,
+  getJsonCache,
+  isCacheEntryFresh,
+  isCacheFresh,
   linkBlobCacheEntry,
   listCachedBlobs,
+  makeCacheTimestamps,
   normalizeBlobFileNames,
   parseBlobCacheFileName,
   parseBlobCacheNameParts,
@@ -28,5 +35,7 @@ export {
   sanitizeDocumentId,
   saveBlobFile,
   saveDownloadedDocument,
+  saveJsonCache,
   savePrepareResult,
+  storageRef,
 } from "./service"

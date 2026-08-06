@@ -45,7 +45,14 @@ export async function POST(request: Request) {
   log("POST start")
   try {
     const body = (await request.json().catch(() => ({}))) as {
-      kind?: "cosmos" | "prepare" | "blob" | "download" | "all"
+      kind?:
+        | "cosmos"
+        | "prepare"
+        | "blob"
+        | "cosmos-query"
+        | "upload-history"
+        | "download"
+        | "all"
       documentId?: string
     }
     log("body", { kind: body.kind ?? "all", documentId: body.documentId ?? null })

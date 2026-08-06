@@ -32,7 +32,18 @@ export {
   parseBlobCacheFileName,
   parseBlobCacheNameParts,
   sanitizeDocumentId,
+  storageRef,
 } from "./helpers"
+
+export { getJsonCache, saveJsonCache } from "./mongodb-provider"
+
+export {
+  DEFAULT_CACHE_TTL_MS,
+  getCacheTtlMs,
+  isCacheEntryFresh,
+  isCacheFresh,
+  makeCacheTimestamps,
+} from "./ttl"
 
 function resolveFlushDocumentId(documentId?: string): string | null {
   if (!documentId) return null
@@ -427,16 +438,18 @@ export async function readCachedPrepareJson(documentId: string) {
 }
 
 export async function flushCache(options?: {
-  kind?: "cosmos" | "prepare" | "blob" | "download" | "all"
+  kind?: CacheKind | "download" | "all"
   documentId?: string
 }) {
   const requested = options?.kind ?? "all"
   const flushId = resolveFlushDocumentId(options?.documentId)
 
   const kinds: CacheKind[] =
-    requested === "all" || requested === "download"
-      ? ["cosmos", "prepare", "blob"]
-      : [requested]
+    requested === "all"
+      ? ["cosmos", "prepare", "blob", "cosmos-query", "upload-history"]
+      : requested === "download"
+        ? ["cosmos", "prepare", "blob"]
+        : [requested]
 
   const removed: string[] = []
   for (const current of kinds) {

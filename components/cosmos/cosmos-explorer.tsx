@@ -8,7 +8,7 @@ import {
   useState,
 } from "react"
 import { useRouter } from "next/navigation"
-import { ChevronRight, ChevronsDownUp, ChevronsUpDown, CloudDownload, Columns2, Database, Download, FileDown, FileText, FolderTree, HardDrive, History, Loader2, Rows2, ScanText, Search, Trash2, WandSparkles } from "lucide-react"
+import { ChevronRight, ChevronsDownUp, ChevronsUpDown, CloudDownload, Columns2, Database, Download, FileDown, FileText, FolderTree, HardDrive, History, Loader2, Rows2, ScanText, Search, Table2, Trash2, WandSparkles } from "lucide-react"
 import { JsonView, allExpanded, collapseAllNested, darkStyles } from "react-json-view-lite"
 import "react-json-view-lite/dist/index.css"
 
@@ -37,7 +37,7 @@ const cosmosJsonStyles: typeof darkStyles = {
   },
 }
 
-import { Button } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
 import {
   Tooltip,
   TooltipContent,
@@ -235,6 +235,105 @@ function parseBlobFileName(blobFileName: string) {
   const page = fileName.replace(/\.[^.]+$/, "") || fileName
 
   return { batchId, docId, page, group }
+}
+
+/** DOC0009 / DOC0109 = ภส.07-01 (and oil-07-01 docType). */
+function isForm0701Doc(docId: string, docType?: string | null) {
+  const id = normalizeDocId(docId)
+  if (id === "DOC0009" || id === "DOC0109") return true
+  if (typeof docType === "string" && /oil-07-01|07-01/i.test(docType)) return true
+  const label = getDocLabelEntry(id)?.label ?? ""
+  return /ภส\.?\s*07-01|07-01/.test(label) && !/เปรียบเทียบ/.test(label)
+}
+
+/** Hash focus: `#<unixtime>/<DOCxxxx>` e.g. `#1773123456/DOC0009` */
+function buildDocFocusHash(batchId: string, docId: string) {
+  return `#${batchId}/${normalizeDocId(docId)}`
+}
+
+function parseDocFocusHash(
+  hash: string
+): { batchId: string; docId: string } | null {
+  const raw = hash.replace(/^#/, "").trim()
+  if (!raw) return null
+  const slash = raw.indexOf("/")
+  if (slash <= 0) return null
+  let batchId = raw.slice(0, slash)
+  let docId = raw.slice(slash + 1)
+  try {
+    batchId = decodeURIComponent(batchId)
+    docId = decodeURIComponent(docId)
+  } catch {
+    // keep raw
+  }
+  batchId = batchId.trim()
+  docId = normalizeDocId(docId.trim())
+  if (!batchId || !/^DOC\d+/i.test(docId)) return null
+  return { batchId, docId }
+}
+
+function setDocFocusHash(batchId: string, docId: string) {
+  if (typeof window === "undefined") return
+  const nextHash = `${batchId}/${normalizeDocId(docId)}`
+  const current = window.location.hash.replace(/^#/, "")
+  if (current === nextHash) return
+  const url = `${window.location.pathname}${window.location.search}#${nextHash}`
+  window.history.replaceState(null, "", url)
+}
+
+function docsReturnHref(batchId: string, docId: string) {
+  if (typeof window === "undefined") {
+    return `/docs${buildDocFocusHash(batchId, docId)}`
+  }
+  return `${window.location.pathname}${window.location.search}${buildDocFocusHash(batchId, docId)}`
+}
+
+function ocrReview0701Href(opts: {
+  /** เลขชุด เช่น 300769-1785406509202-B104-00-00001261-DOC0009 */
+  setKey?: string | null
+  returnTo?: string | null
+}) {
+  const qs = new URLSearchParams()
+  const setKey =
+    typeof opts.setKey === "string" && opts.setKey.trim()
+      ? opts.setKey.trim().replace(/\/\d+$/, "")
+      : ""
+  if (setKey) qs.set("dg", setKey)
+  if (opts.returnTo && opts.returnTo.startsWith("/docs")) {
+    qs.set("from", opts.returnTo)
+  }
+  const q = qs.toString()
+  return q ? `/docs/07-01-review?${q}` : "/docs/07-01-review"
+}
+
+/**
+ * เลขชุดเอกสารจาก blob path segment ที่มี DOC####
+ * เช่น `300769-1785406509202-B104-00-00001261-DOC0009`
+ */
+function extractDocSetKey(blobFileName: string | null | undefined): string | null {
+  if (!blobFileName) return null
+  const parts = blobFileName.replace(/\\/g, "/").split("/").filter(Boolean)
+  const meta = parts.find((part) => /DOC\d+/i.test(part))
+  if (meta?.trim()) return meta.trim().replace(/\/\d+$/, "")
+  return null
+}
+
+/** Prefer blob set-key; fall back to Cosmos documentGroup (strip /page). */
+function resolveDocSetKey(
+  pages: PageNode[],
+  items: CosmosItem[]
+): string | null {
+  for (const page of pages) {
+    const fromBlob = extractDocSetKey(page.blobFileName)
+    if (fromBlob) return fromBlob
+  }
+  for (const page of pages) {
+    const item = items.find((it) => it.id === page.id)
+    if (typeof item?.documentGroup === "string" && item.documentGroup.trim()) {
+      return item.documentGroup.trim().replace(/\/\d+$/, "")
+    }
+  }
+  return null
 }
 
 function inferBatchDocGroup(
@@ -580,6 +679,59 @@ export function DocWorkbench({
     return `/download/blob/${encodeURIComponent(selectedId)}#toolbar=0&navpanes=0&scrollbar=1`
   }, [blobSource, pageCacheMap, selectedId])
 
+  const selectedItem = useMemo(
+    () => currentData.find((item) => item.id === selectedId) ?? null,
+    [currentData, selectedId]
+  )
+
+  const selectedDocId = useMemo(() => {
+    if (selectedBlobFileName) return parseBlobFileName(selectedBlobFileName).docId
+    if (typeof selectedItem?.blobFileName === "string") {
+      return parseBlobFileName(selectedItem.blobFileName).docId
+    }
+    return null
+  }, [selectedBlobFileName, selectedItem])
+
+  const selectedDocPages = useMemo(() => {
+    if (!selectedDocId || !selectedBlobFileName) return [] as PageNode[]
+    const { batchId } = parseBlobFileName(selectedBlobFileName)
+    const batch = tree.find((b) => b.batchId === batchId)
+    const doc = batch?.docs.find((d) => d.docId === selectedDocId)
+    return doc?.pages ?? []
+  }, [tree, selectedDocId, selectedBlobFileName])
+
+  const reviewSetKey = useMemo(() => {
+    return (
+      resolveDocSetKey(selectedDocPages, currentData) ??
+      extractDocSetKey(selectedBlobFileName)
+    )
+  }, [selectedDocPages, currentData, selectedBlobFileName])
+
+  const showOcrReview = Boolean(
+    selectedDocId &&
+      reviewSetKey &&
+      isForm0701Doc(
+        selectedDocId,
+        typeof selectedItem?.docType === "string" ? selectedItem.docType : null
+      )
+  )
+
+  const ocrReviewUrl = useMemo(() => {
+    const returnTo =
+      selectedDocId && selectedBlobFileName
+        ? docsReturnHref(
+            parseBlobFileName(selectedBlobFileName).batchId,
+            selectedDocId
+          )
+        : typeof window !== "undefined"
+          ? `${window.location.pathname}${window.location.search}${window.location.hash}`
+          : "/docs"
+    return ocrReview0701Href({
+      setKey: reviewSetKey,
+      returnTo,
+    })
+  }, [selectedDocId, selectedBlobFileName, reviewSetKey])
+
   const showTablePdf = Boolean(pdfEmbedSrc)
   const prepareResultForDisplay = useMemo(() => {
     if (!prepareResult) return null
@@ -779,7 +931,11 @@ export function DocWorkbench({
     )
     params.set("view", next)
     const query = params.toString()
-    router.push(query ? `/docs?${query}` : "/docs", { scroll: false })
+    const hash =
+      typeof window !== "undefined" ? window.location.hash : ""
+    router.push(query ? `/docs?${query}${hash}` : `/docs${hash}`, {
+      scroll: false,
+    })
   }
 
   function applyFilter() {
@@ -818,8 +974,14 @@ export function DocWorkbench({
     const key = `${batchId}/${docId}`
     setExpandedDocs((prev) => {
       const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
+      const opening = !next.has(key)
+      if (opening) {
+        next.add(key)
+        setExpandedBatches((batches) => new Set(batches).add(batchId))
+        setDocFocusHash(batchId, docId)
+      } else {
+        next.delete(key)
+      }
       return next
     })
   }
@@ -867,7 +1029,64 @@ export function DocWorkbench({
     setSelectedBlobFileName(page.blobFileName)
     setActionMessage(null)
     setError(null)
+    const { batchId, docId } = parseBlobFileName(page.blobFileName)
+    setExpandedBatches((prev) => new Set(prev).add(batchId))
+    setExpandedDocs((prev) => new Set(prev).add(`${batchId}/${docId}`))
+    setDocFocusHash(batchId, docId)
   }
+
+  const applyDocFocusFromHash = useCallback(
+    (hash: string, options?: { selectIfEmpty?: boolean }) => {
+      const focus = parseDocFocusHash(hash)
+      if (!focus) return false
+      const batch = tree.find((b) => b.batchId === focus.batchId)
+      if (!batch) return false
+      const doc = batch.docs.find((d) => d.docId === focus.docId)
+      if (!doc || doc.pages.length === 0) return false
+
+      const docKey = `${focus.batchId}/${focus.docId}`
+      setExpandedBatches((prev) => new Set(prev).add(focus.batchId))
+      setExpandedDocs((prev) => new Set(prev).add(docKey))
+
+      const selectIfEmpty = options?.selectIfEmpty !== false
+      setSelectedId((prev) => {
+        if (prev && doc.pages.some((p) => p.id === prev)) return prev
+        if (!selectIfEmpty && prev) return prev
+        return doc.pages[0].id
+      })
+      setSelectedBlobFileName((prev) => {
+        // Keep current blob if selection stays inside this DOC.
+        if (prev) {
+          try {
+            const cur = parseBlobFileName(prev)
+            if (cur.batchId === focus.batchId && cur.docId === focus.docId) {
+              return prev
+            }
+          } catch {
+            // fall through
+          }
+        }
+        if (!selectIfEmpty && prev) return prev
+        return doc.pages[0].blobFileName
+      })
+      return true
+    },
+    [tree]
+  )
+
+  useEffect(() => {
+    if (!hasSearched || tree.length === 0) return
+    if (typeof window === "undefined") return
+    applyDocFocusFromHash(window.location.hash)
+  }, [hasSearched, tree, applyDocFocusFromHash])
+
+  useEffect(() => {
+    const onHashChange = () => {
+      applyDocFocusFromHash(window.location.hash)
+    }
+    window.addEventListener("hashchange", onHashChange)
+    return () => window.removeEventListener("hashchange", onHashChange)
+  }, [applyDocFocusFromHash])
 
   async function fetchDocumentById(id: string) {
     const response = await fetch(`/api/cosmos/item/${encodeURIComponent(id)}`, {
@@ -1486,6 +1705,31 @@ export function DocWorkbench({
                                   {fullLabel}
                                 </TooltipContent>
                               </Tooltip>
+                              {hasPages && isForm0701Doc(doc.docId) ? (
+                                <a
+                                  href={ocrReview0701Href({
+                                    setKey: resolveDocSetKey(doc.pages, currentData),
+                                    returnTo: docsReturnHref(
+                                      batch.batchId,
+                                      doc.docId
+                                    ),
+                                  })}
+                                  title="รีวิว ภส.07-01 · ทั้งชุดเอกสาร"
+                                  className="mr-1 inline-flex h-6 items-center gap-1 rounded-md border border-cyan-600/50 bg-cyan-950/40 px-1.5 text-[11px] text-cyan-100 hover:bg-cyan-900/50"
+                                  onClick={() => {
+                                    setExpandedBatches((prev) =>
+                                      new Set(prev).add(batch.batchId)
+                                    )
+                                    setExpandedDocs((prev) =>
+                                      new Set(prev).add(`${batch.batchId}/${doc.docId}`)
+                                    )
+                                    setDocFocusHash(batch.batchId, doc.docId)
+                                  }}
+                                >
+                                  <Table2 className="size-3" />
+                                  07-01
+                                </a>
+                              ) : null}
                               {hasPages && docHasAnyCache(doc) ? (
                                 <button
                                   type="button"
@@ -1719,6 +1963,24 @@ export function DocWorkbench({
                 )}
                 OCR
               </Button>
+              {showOcrReview ? (
+                <a
+                  href={ocrReviewUrl}
+                  title="เปิดรีวิว ภส.07-01 — AI แมพหัวตาราง"
+                  className={cn(
+                    buttonVariants({ variant: "outline", size: "sm" }),
+                    "h-7 rounded-md border-cyan-500/60 bg-cyan-500/10 text-cyan-100 hover:bg-cyan-500/20 hover:text-white"
+                  )}
+                  onClick={() => {
+                    if (!selectedBlobFileName || !selectedDocId) return
+                    const { batchId } = parseBlobFileName(selectedBlobFileName)
+                    setDocFocusHash(batchId, selectedDocId)
+                  }}
+                >
+                  <Table2 className="size-3.5" />
+                  รีวิว 07-01
+                </a>
+              ) : null}
               <Button
                 type="button"
                 size="sm"

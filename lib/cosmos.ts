@@ -270,3 +270,165 @@ export async function cosmosReplaceDocument<T extends Record<string, unknown>>(
 
   throw lastError ?? new Error("Cosmos replace failed")
 }
+
+export function getCorrectedContainerId() {
+  return (
+    process.env.COSMOS_CORRECTED_CONTAINER_ID?.trim() || "doc-data-corrected"
+  )
+}
+
+async function cosmosSqlQueryInContainer<T = Record<string, unknown>>(
+  containerId: string,
+  query: string,
+  parameters: CosmosParameter[] = [],
+  options?: CosmosQueryOptions
+): Promise<CosmosQueryResult<T>> {
+  assertCosmosEnv()
+
+  const databaseId = requiredEnv("COSMOS_DATABASE_ID")
+  const resourceLink = `dbs/${databaseId}/colls/${containerId}`
+  const path = `/dbs/${encodeURIComponent(databaseId)}/colls/${encodeURIComponent(containerId)}/docs`
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/query+json",
+    "x-ms-documentdb-isquery": "True",
+    "x-ms-documentdb-query-enablecrosspartition": "true",
+    "x-ms-max-item-count": String(
+      Math.min(Math.max(options?.maxItemCount ?? 50, 1), 100)
+    ),
+  }
+
+  const continuation = options?.continuationToken?.trim()
+  if (continuation) {
+    headers["x-ms-continuation"] = continuation
+  }
+
+  const { response, data } = await cosmosFetch("POST", "docs", resourceLink, path, {
+    body: JSON.stringify({
+      query,
+      parameters,
+    }),
+    headers,
+  })
+
+  const payload = (data ?? {}) as {
+    Documents?: T[]
+  }
+
+  const requestChargeHeader = response.headers.get("x-ms-request-charge")
+  const requestCharge = requestChargeHeader ? Number(requestChargeHeader) : null
+
+  return {
+    items: Array.isArray(payload.Documents) ? payload.Documents : [],
+    continuationToken: response.headers.get("x-ms-continuation"),
+    requestCharge: Number.isFinite(requestCharge) ? requestCharge : null,
+  }
+}
+
+export async function cosmosGetDocumentByIdInContainer<
+  T = Record<string, unknown>,
+>(containerId: string, documentId: string): Promise<T | null> {
+  const result = await cosmosSqlQueryInContainer<T>(
+    containerId,
+    "SELECT * FROM c WHERE c.id = @id",
+    [{ name: "@id", value: documentId }],
+    { maxItemCount: 1 }
+  )
+  return result.items[0] ?? null
+}
+
+/**
+ * Upsert into a specific container (partition key `/id`).
+ * Used for OCR-review corrected docs (never touches original doc-data).
+ */
+export async function cosmosUpsertDocumentInContainer<
+  T extends Record<string, unknown>,
+>(containerId: string, document: T): Promise<T> {
+  assertCosmosEnv()
+
+  const id = typeof document.id === "string" ? document.id.trim() : ""
+  if (!id) {
+    throw new Error("Document id is required for upsert")
+  }
+
+  const databaseId = requiredEnv("COSMOS_DATABASE_ID")
+  const resourceLink = `dbs/${databaseId}/colls/${containerId}`
+  const path = `/dbs/${encodeURIComponent(databaseId)}/colls/${encodeURIComponent(containerId)}/docs`
+
+  const {
+    _rid: _r,
+    _self: _s,
+    _etag: _e,
+    _attachments: _a,
+    _ts: _t,
+    ...body
+  } = document as T & {
+    _rid?: unknown
+    _self?: unknown
+    _etag?: unknown
+    _attachments?: unknown
+    _ts?: unknown
+  }
+
+  const { data } = await cosmosFetch("POST", "docs", resourceLink, path, {
+    body: JSON.stringify(body),
+    headers: {
+      "Content-Type": "application/json",
+      "x-ms-documentdb-is-upsert": "True",
+      "x-ms-documentdb-partitionkey": JSON.stringify([id]),
+    },
+  })
+
+  return (data ?? body) as T
+}
+
+/**
+ * Load all pages for a DOC set key.
+ * Set key may be a full documentGroup prefix, or just the middle segment
+ * e.g. `300769-1785406509202-B104-00-00001261-DOC0009`
+ * (Cosmos documentGroup is often `BANGCHAK-test/<setKey>/…`).
+ */
+export async function cosmosQueryByDocumentGroupPrefix<
+  T = Record<string, unknown>,
+>(documentGroup: string, containerId?: string): Promise<T[]> {
+  const coll = containerId || requiredEnv("COSMOS_CONTAINER_ID")
+  const dg = documentGroup.trim()
+  if (!dg) return []
+
+  const items: T[] = []
+  let continuationToken: string | null = null
+
+  // Prefer STARTSWITH when caller already has a path prefix; also CONTAINS so a
+  // bare set key (…-DOC0009) still matches `folder/setKey/…` documentGroups.
+  const query = dg.includes("/")
+    ? "SELECT * FROM c WHERE STARTSWITH(c.documentGroup, @dg) OR CONTAINS(c.blobFileName, @dg)"
+    : "SELECT * FROM c WHERE CONTAINS(c.documentGroup, @dg) OR CONTAINS(c.blobFileName, @dg)"
+
+  do {
+    const result = await cosmosSqlQueryInContainer<T>(
+      coll,
+      query,
+      [{ name: "@dg", value: dg }],
+      { maxItemCount: 100, continuationToken }
+    )
+    items.push(...result.items)
+    continuationToken = result.continuationToken
+  } while (continuationToken)
+
+  return items
+}
+
+export async function cosmosSearchDocumentGroups(q: string) {
+  const result = await cosmosSqlQuery<{
+    id: string
+    documentGroup?: string
+    docType?: string
+    plainOriginalFileName?: string
+    pageNumber?: string | number
+  }>(
+    "SELECT c.id, c.documentGroup, c.docType, c.plainOriginalFileName, c.pageNumber FROM c WHERE CONTAINS(c.documentGroup, @q) ORDER BY c.createdAt DESC OFFSET 0 LIMIT 30",
+    [{ name: "@q", value: q }],
+    { maxItemCount: 30 }
+  )
+  return result.items
+}

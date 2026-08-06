@@ -41,7 +41,7 @@ export function isCosmosFilterMode(value: unknown): value is CosmosFilterMode {
 export function buildCosmosSqlQuery(input: CosmosQueryInput) {
   const value = input.value?.trim() ?? ""
   const selectClause = input.selectLite
-    ? "SELECT c.id, c.blobFileName FROM c"
+    ? "SELECT c.id, c.blobFileName, c.documentGroup FROM c"
     : "SELECT * FROM c"
 
   if (!value) {
@@ -83,6 +83,8 @@ export function buildCosmosQueryCacheKey(input: {
     mode: input.mode,
     value: input.value,
     selectLite: input.selectLite,
+    // bump when lite SELECT columns change (keeps stale caches from dropping fields)
+    liteFields: input.selectLite ? "id,blobFileName,documentGroup" : null,
   })
   return Buffer.from(raw, "utf8").toString("base64url")
 }

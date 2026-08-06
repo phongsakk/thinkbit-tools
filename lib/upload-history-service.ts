@@ -8,7 +8,6 @@ import {
   normalizeUploadHistoryFilters,
   readWarehouseManifest,
   readUploadHistoryCache,
-  UPLOAD_HISTORY_TTL_MS,
   UPLOAD_HISTORY_VERSION,
   upsertSearchManifest,
   writeUploadHistoryCache,
@@ -16,6 +15,7 @@ import {
   type UploadHistoryPayload,
   type UploadHistorySearchEntry,
 } from "@/lib/upload-history-cache"
+import { makeCacheTimestamps } from "@/lib/services/cache"
 
 type LiteItem = {
   id?: string
@@ -175,10 +175,11 @@ async function buildUploadHistory(filters?: UploadHistoryFilters): Promise<{
       count,
     }))
 
+  const timestamps = makeCacheTimestamps("upload-history")
   const payloadToSave: UploadHistoryPayload = {
     version: UPLOAD_HISTORY_VERSION,
-    savedAt: new Date().toISOString(),
-    expiresAt: new Date(Date.now() + UPLOAD_HISTORY_TTL_MS).toISOString(),
+    savedAt: timestamps.savedAt,
+    expiresAt: timestamps.expiresAt,
     groups,
     totalItems: itemsLoaded,
     requestCharge: ru > 0 ? ru : null,
@@ -221,32 +222,37 @@ export type UploadHistoryResult = UploadHistoryPayload & {
   storagePath: string
 }
 
+/**
+ * Read upload-history from MongoDB cache only (no Cosmos).
+ * Returns null when missing, invalid, or expired (all entries use TTL).
+ */
+export async function getCachedUploadHistory(
+  filters?: UploadHistoryFilters
+): Promise<UploadHistoryResult | null> {
+  const normalized = normalizeFilters(filters)
+  const cacheKey = buildUploadHistoryCacheKey(normalized)
+  const cached = await readUploadHistoryCache(cacheKey)
+  if (!cached || !isUploadHistoryFresh(cached)) return null
+
+  const warehouses = await readWarehouseManifest()
+  const searchHistory = await upsertSearchManifest(normalized, cached.savedAt, cacheKey)
+  return {
+    ...cached,
+    source: "cache",
+    warehouses,
+    cacheKey,
+    searchHistory,
+    storagePath: getUploadHistoryStoragePath(cacheKey),
+  }
+}
+
 export async function getUploadHistory(
   forceFresh: boolean,
   filters?: UploadHistoryFilters
 ): Promise<UploadHistoryResult> {
-  const normalized = normalizeFilters(filters)
-  const hasFilters = Boolean(
-    normalized.fromTime || normalized.toTime || normalized.warehouses.length > 0
-  )
-  const cacheKey = buildUploadHistoryCacheKey(normalized)
-
   if (!forceFresh) {
-    const cached = await readUploadHistoryCache(cacheKey)
-    // Filtered cache never expires; no-filter cache still uses TTL.
-    const canUseCache = cached && (hasFilters || isUploadHistoryFresh(cached))
-    if (canUseCache) {
-      const warehouses = await readWarehouseManifest()
-      const searchHistory = await upsertSearchManifest(normalized, cached.savedAt, cacheKey)
-      return {
-        ...cached,
-        source: "cache",
-        warehouses,
-        cacheKey,
-        searchHistory,
-        storagePath: getUploadHistoryStoragePath(cacheKey),
-      }
-    }
+    const cached = await getCachedUploadHistory(filters)
+    if (cached) return cached
   }
 
   const { payload, warehouses, cacheKey: builtCacheKey, searchHistory } =

@@ -1,7 +1,3 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises"
-import path from "node:path"
-
-import { cosmosSqlQuery, type CosmosQueryResult as CosmosSqlQueryResult } from "@/lib/cosmos"
 import {
   buildCosmosQueryCacheKey,
   buildCosmosSqlQuery,
@@ -14,12 +10,20 @@ import {
   type CosmosQueryInput,
   type CosmosQueryResult,
 } from "@/lib/cosmos-query-shared"
+import { cosmosSqlQuery, type CosmosQueryResult as CosmosSqlQueryResult } from "@/lib/cosmos"
+import {
+  getJsonCache,
+  makeCacheTimestamps,
+  saveJsonCache,
+  storageRef,
+} from "@/lib/services/cache"
 
 export * from "@/lib/cosmos-query-shared"
 
 type QueryCachePayload = {
   version: 1
   savedAt: string
+  expiresAt: string | null
   field: CosmosFilterField
   mode: CosmosFilterMode
   value: string
@@ -28,40 +32,31 @@ type QueryCachePayload = {
   requestCharge: number | null
 }
 
-function getQueryCacheDir() {
-  const configuredRoot = process.env.LOCAL_CACHE_DIR?.trim()
-  if (configuredRoot) return path.join(configuredRoot, "cosmos-query")
-  if (process.env.VERCEL) {
-    return path.join("/tmp", "thinkbit-tools", "download", "cosmos-query")
-  }
-  return path.join(process.cwd(), "download", "cosmos-query")
-}
-
-function getQueryCachePath(cacheKey: string) {
-  return path.join(getQueryCacheDir(), `${cacheKey}.json`)
+function isValidQueryCache(data: Record<string, unknown>): data is QueryCachePayload {
+  return (
+    data.version === 1 &&
+    typeof data.savedAt === "string" &&
+    (data.expiresAt === null || typeof data.expiresAt === "string") &&
+    Array.isArray(data.items) &&
+    typeof data.field === "string" &&
+    typeof data.mode === "string" &&
+    typeof data.value === "string"
+  )
 }
 
 async function readQueryCache(cacheKey: string): Promise<QueryCachePayload | null> {
-  try {
-    const raw = await readFile(getQueryCachePath(cacheKey), "utf8")
-    const parsed = JSON.parse(raw) as QueryCachePayload
-    if (
-      !parsed ||
-      parsed.version !== 1 ||
-      !Array.isArray(parsed.items) ||
-      typeof parsed.savedAt !== "string"
-    ) {
-      return null
-    }
-    return parsed
-  } catch {
-    return null
-  }
+  const cached = await getJsonCache("cosmos-query", cacheKey)
+  if (!cached || !isValidQueryCache(cached.data)) return null
+  // cosmos-query has no TTL (/docs); provider already skips expiry.
+  return cached.data
 }
 
 async function writeQueryCache(payload: QueryCachePayload, cacheKey: string) {
-  await mkdir(getQueryCacheDir(), { recursive: true })
-  await writeFile(getQueryCachePath(cacheKey), JSON.stringify(payload, null, 2), "utf8")
+  await saveJsonCache("cosmos-query", cacheKey, payload)
+}
+
+export function getCosmosQueryStoragePath(cacheKey: string) {
+  return storageRef("cosmos-query", cacheKey)
 }
 
 export async function runCosmosQuery(
@@ -135,10 +130,12 @@ export async function runCosmosQuery(
         value,
         selectLite,
       })
+      const timestamps = makeCacheTimestamps("cosmos-query")
       await writeQueryCache(
         {
           version: 1,
-          savedAt: new Date().toISOString(),
+          savedAt: timestamps.savedAt,
+          expiresAt: timestamps.expiresAt,
           field: input.field,
           mode: input.mode,
           value,

@@ -4,6 +4,7 @@ import { Geist_Mono, Prompt } from "next/font/google"
 
 import "./globals.css"
 import { AppSidebar } from "@/components/app-sidebar"
+import { HotToaster } from "@/components/hot-toaster"
 import { THEME_INIT_SCRIPT, ThemeProvider } from "@/components/theme-provider"
 import { cn } from "@/lib/utils"
 
@@ -47,6 +48,7 @@ export default function RootLayout({
             <AppSidebar />
             <div className="min-h-0 min-w-0 flex-1 overflow-auto">{children}</div>
           </div>
+          <HotToaster />
         </ThemeProvider>
       </body>
     </html>
