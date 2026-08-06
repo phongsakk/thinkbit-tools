@@ -253,3 +253,78 @@
     }
   }
 }
+
+/* SweetAlert2 — confirm with blurred backdrop */
+.swal2-container.swal-blur-container {
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.swal2-popup.swal-dark-popup {
+  background: #0f172a !important;
+  border: 1px solid #475569;
+  border-radius: 12px;
+  color: #f1f5f9;
+  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.55);
+  padding: 1.5rem 1.25rem 1.25rem;
+}
+
+.swal2-title.swal-dark-title {
+  color: #f8fafc !important;
+  font-size: 1.125rem !important;
+  font-weight: 600;
+}
+
+.swal2-html-container.swal-dark-html {
+  color: #cbd5e1 !important;
+  font-size: 0.9375rem !important;
+}
+
+.swal-dark-actions {
+  gap: 0.5rem !important;
+  margin-top: 1.25rem !important;
+}
+
+.swal-btn {
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.25rem;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.swal-btn-ghost {
+  background: transparent;
+  border-color: #475569;
+  color: #e2e8f0;
+}
+
+.swal-btn-ghost:hover {
+  background: #1e293b;
+}
+
+.swal-btn-danger {
+  background: #dc2626;
+  color: #fff;
+}
+
+.swal-btn-danger:hover {
+  background: #ef4444;
+}
+
+.swal-btn-primary {
+  background: #0891b2;
+  color: #fff;
+}
+
+.swal-btn-primary:hover {
+  background: #06b6d4;
+}
+
+.swal2-icon.swal2-warning {
+  border-color: #f59e0b !important;
+  color: #f59e0b !important;
+}

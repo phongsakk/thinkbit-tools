@@ -29,6 +29,13 @@ export const COL_GAIN = "Gain"
 /** Forced receive columns — always present after normalize. */
 export const FORCED_RECEIVE_COLS = [COL_BL, COL_OUTTURN, COL_RECV_ACCT] as const
 
+/** Forced balance columns — always present after normalize. */
+export const FORCED_BALANCE_COLS = [
+  COL_BALANCE_STOCK,
+  COL_BALANCE_ACCT,
+  COL_BALANCE,
+] as const
+
 export type ColumnGroupId =
   | "identity"
   | "receive"
@@ -241,6 +248,7 @@ export function assumeProductColumns(colMapIn: string[]): {
 
 /**
  * Ensure B/L, Outturn, รับตามบัญชีสิทธิ์ exist.
+ * Ensure คงเหลือ Stock, คงเหลือตามบัญชีสิทธิ์, คงเหลือ exist.
  * Legacy "จำนวนรับ" is normalized to รับตามบัญชีสิทธิ์ (no separate column).
  * Seed คงเหลือ from คงเหลือตามบัญชีสิทธิ์ when blank.
  * Then assume unmapped mid-table columns as ผลิตภัณฑ์.
@@ -290,9 +298,12 @@ export function ensureForcedReceiveColumns(
     return headers.length - 1
   }
 
-  if (findCi(COL_BL) < 0) appendCol(COL_BL, COL_BL)
-  if (findCi(COL_OUTTURN) < 0) appendCol(COL_OUTTURN, COL_OUTTURN)
-  if (findCi(COL_RECV_ACCT) < 0) appendCol(COL_RECV_ACCT, COL_RECV_ACCT)
+  for (const canon of FORCED_RECEIVE_COLS) {
+    if (findCi(canon) < 0) appendCol(canon, canon)
+  }
+  for (const canon of FORCED_BALANCE_COLS) {
+    if (findCi(canon) < 0) appendCol(canon, canon)
+  }
 
   for (const row of rows) {
     while (row.cells.length < headers.length) row.cells.push("")
@@ -301,25 +312,19 @@ export function ensureForcedReceiveColumns(
   const seededEdits: Record<number, Record<number, string>> = {}
 
   // Seed คงเหลือ ← คงเหลือตามบัญชีสิทธิ์ when คงเหลือ blank
-  let balAcctCi = findCi(COL_BALANCE_ACCT)
-  let balCi = findCi(COL_BALANCE)
-  if (balAcctCi >= 0) {
-    const hasAcctVals = rows.some((r) => (r.cells[balAcctCi] ?? "").trim())
-    if (balCi < 0 && hasAcctVals) {
-      balCi = appendCol(COL_BALANCE, COL_BALANCE)
-    }
-    if (balCi >= 0) {
-      rows.forEach((row, ri) => {
-        const balVal = (row.cells[balCi] ?? "").trim()
-        const acctVal = (row.cells[balAcctCi] ?? "").trim()
-        if (!balVal && acctVal) {
-          row.cells[balCi] = acctVal
-          if (!seededEdits[ri]) seededEdits[ri] = {}
-          seededEdits[ri][balCi] = acctVal
-          mutated = true
-        }
-      })
-    }
+  const balAcctCi = findCi(COL_BALANCE_ACCT)
+  const balCi = findCi(COL_BALANCE)
+  if (balAcctCi >= 0 && balCi >= 0) {
+    rows.forEach((row, ri) => {
+      const balVal = (row.cells[balCi] ?? "").trim()
+      const acctVal = (row.cells[balAcctCi] ?? "").trim()
+      if (!balVal && acctVal) {
+        row.cells[balCi] = acctVal
+        if (!seededEdits[ri]) seededEdits[ri] = {}
+        seededEdits[ri][balCi] = acctVal
+        mutated = true
+      }
+    })
   }
 
   // After identity (+ receive) and before จำนวนจ่าย markers → ผลิตภัณฑ์

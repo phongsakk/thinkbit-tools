@@ -11,7 +11,7 @@ import {
   type ColumnGroupId,
 } from "@/lib/ocr-review/0701-columns"
 import type { Row, Section } from "@/lib/ocr-review/types"
-import { toastConfirm } from "@/lib/toast-confirm"
+import { swalConfirm } from "@/lib/swal"
 import {
   Tooltip,
   TooltipContent,
@@ -155,7 +155,7 @@ export function SectionTable({
             onClick={() => {
               void (async () => {
                 if (
-                  await toastConfirm(
+                  await swalConfirm(
                     `ลบคอลัมน์ “${mapped || ocr || ci + 1}”?`
                   )
                 ) {
@@ -302,7 +302,7 @@ export function SectionTable({
                         className="text-slate-500 hover:bg-red-600 hover:text-white"
                         onClick={() => {
                           void (async () => {
-                            if (await toastConfirm(`ลบแถวที่ ${ri + 1}?`)) {
+                            if (await swalConfirm(`ลบแถวที่ ${ri + 1}?`)) {
                               onDeleteRow(ri)
                             }
                           })()

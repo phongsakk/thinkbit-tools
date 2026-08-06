@@ -15,7 +15,7 @@ import toast from "react-hot-toast"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { toastConfirm } from "@/lib/toast-confirm"
+import { swalConfirm } from "@/lib/swal"
 import {
   addExtraCanon,
   canonFor,
@@ -64,6 +64,21 @@ function arrayBufferToBase64(buf: ArrayBuffer): string {
     binary += String.fromCharCode(...bytes.subarray(i, i + chunk))
   }
   return btoa(binary)
+}
+
+/** UI label: always "หน้าที่ %s" (+ optional suffix from OCR). */
+function formatPageLabel(sec: Section, si: number): string {
+  const pageStr = String(sec.page || "").trim()
+  if (/^หน้าที่\b/.test(pageStr)) return pageStr
+
+  const fromNo =
+    sec.pageNo != null && String(sec.pageNo).trim() !== ""
+      ? String(sec.pageNo).trim()
+      : ""
+  const numMatch = (fromNo || pageStr).match(/(\d+)/)
+  const num = numMatch ? numMatch[1] : String(si + 1)
+  const suffix = pageStr.match(/\s*(\([^)]+\))\s*$/)
+  return suffix ? `หน้าที่ ${num} ${suffix[1]}` : `หน้าที่ ${num}`
 }
 
 /** Visible column indices in display order for a section. */
@@ -838,7 +853,7 @@ export function Form0701ReviewApp({ setKey, backHref }: Props) {
   }
 
   const handleReset = async () => {
-    if (!(await toastConfirm("ล้างการแก้ทั้งหมดของชุดนี้?"))) return
+    if (!(await swalConfirm("ล้างการแก้ทั้งหมดของชุดนี้?"))) return
     setState((prev) => {
       const pageMeta: FileState["pageMeta"] = {}
       const cur: Section[] = []
@@ -1169,7 +1184,7 @@ export function Form0701ReviewApp({ setKey, backHref }: Props) {
                         : "border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800"
                     )}
                   >
-                    {sec.page || `หน้า ${si + 1}`}
+                    {formatPageLabel(sec, si)}
                   </button>
                 ))}
               </div>
@@ -1196,7 +1211,7 @@ export function Form0701ReviewApp({ setKey, backHref }: Props) {
                   >
                     <div className="flex flex-wrap items-center gap-2 border-b border-slate-700 bg-slate-800/80 px-3 py-2">
                       <h2 className="text-sm font-semibold text-slate-100">
-                        {sec.page}
+                        {formatPageLabel(sec, si)}
                       </h2>
                       <span className="text-[11px] text-slate-500">
                         {sec.rows.length} แถว
