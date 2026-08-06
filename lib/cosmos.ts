@@ -405,7 +405,7 @@ export async function cosmosQueryByDocumentGroupPrefix<
     : "SELECT * FROM c WHERE CONTAINS(c.documentGroup, @dg) OR CONTAINS(c.blobFileName, @dg)"
 
   do {
-    const result = await cosmosSqlQueryInContainer<T>(
+    const result: CosmosQueryResult<T> = await cosmosSqlQueryInContainer<T>(
       coll,
       query,
       [{ name: "@dg", value: dg }],

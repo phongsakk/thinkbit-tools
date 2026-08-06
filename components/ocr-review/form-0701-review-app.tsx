@@ -141,6 +141,90 @@ function hashIdForGroup(
   return `sec-${g.indices[0]}`
 }
 
+/**
+ * Copy column mappings from the first page of a group onto later pages.
+ * Only fills empty (unmapped) slots — never overwrites an existing mapping.
+ */
+function propagateColMapFromFirst(
+  prev: FileState,
+  groupIndices: number[],
+  onlyCi?: number
+): FileState | null {
+  if (groupIndices.length < 2) return null
+  const firstSi = groupIndices[0]
+  const srcMap = [...(prev.colMap[firstSi] || [])]
+  const colMap = prev.colMap.map((row) => [...(row || [])])
+  const prodName: FileState["prodName"] = { ...prev.prodName }
+  const displayOrder = prev.displayOrder.map((row) => [...(row || [])])
+  let changed = false
+
+  for (const si of groupIndices.slice(1)) {
+    const headerLen = prev.cur[si]?.headers.length || 0
+    if (!colMap[si]) colMap[si] = []
+    while (colMap[si].length < headerLen) colMap[si].push("")
+
+    const maxCi =
+      onlyCi != null
+        ? onlyCi
+        : Math.min(srcMap.length, colMap[si].length) - 1
+    if (maxCi < 0) continue
+
+    const start = onlyCi != null ? onlyCi : 0
+    for (let ci = start; ci <= maxCi; ci++) {
+      if (onlyCi != null && ci !== onlyCi) continue
+      if (ci >= colMap[si].length) break
+      const src = normalizeCanon(srcMap[ci]) || srcMap[ci] || ""
+      if (!src) continue
+      const cur = normalizeCanon(colMap[si][ci]) || colMap[si][ci] || ""
+      if (cur) continue // already mapped — do not change
+      colMap[si][ci] = src
+      changed = true
+      if (isProductCanon(src)) {
+        const pname =
+          prev.prodName[firstSi]?.[ci] ||
+          productNameFromHeader(prev.cur[si]?.headers[ci]) ||
+          productNameFromHeader(prev.cur[firstSi]?.headers[ci]) ||
+          ""
+        if (pname && !prodName[si]?.[ci]) {
+          prodName[si] = { ...(prodName[si] || {}), [ci]: pname }
+        }
+      }
+    }
+
+    while (displayOrder.length <= si) displayOrder.push([])
+    displayOrder[si] = buildDisplayOrder(
+      headerLen || colMap[si].length,
+      colMap[si],
+      deletedCiSet(si, prev.deletedCols)
+    )
+  }
+
+  if (!changed) return null
+  return { ...prev, colMap, prodName, displayOrder }
+}
+
+/** Propagate mappings for every multi-page oil group. */
+function propagateAllGroupColMaps(prev: FileState): FileState {
+  const groups = buildOilDisplayGroups(prev, true)
+  let next = prev
+  for (const g of groups) {
+    const patched = propagateColMapFromFirst(next, g.indices)
+    if (patched) next = patched
+  }
+  return next
+}
+
+function findGroupIndicesForPage(
+  state: FileState,
+  si: number,
+  groupByName: boolean
+): number[] | null {
+  if (!groupByName) return null
+  const groups = buildOilDisplayGroups(state, true)
+  const g = groups.find((x) => x.indices.includes(si))
+  return g && g.indices.length > 1 ? g.indices : null
+}
+
 function pushUrlHash(id: string, mode: "push" | "replace" = "push") {
   if (typeof window === "undefined") return
   const next = `#${id}`
@@ -621,7 +705,17 @@ export function Form0701ReviewApp({ setKey, backHref }: Props) {
         colMap[si],
         deletedCiSet(si, prev.deletedCols)
       )
-      return { ...prev, colMap, prodName, displayOrder }
+      let next: FileState = { ...prev, colMap, prodName, displayOrder }
+
+      // When grouped: if this is the first page, fill empty slots on later pages only
+      if (groupByName) {
+        const indices = findGroupIndicesForPage(next, si, true)
+        if (indices && indices[0] === si) {
+          const patched = propagateColMapFromFirst(next, indices, ci)
+          if (patched) next = patched
+        }
+      }
+      return next
     })
   }
 
@@ -649,7 +743,7 @@ export function Form0701ReviewApp({ setKey, backHref }: Props) {
       const cur = prev.cur.map((s, i) =>
         i === si ? { ...s, oilType: value } : s
       )
-      return {
+      let next: FileState = {
         ...prev,
         cur,
         pageMeta: {
@@ -657,6 +751,8 @@ export function Form0701ReviewApp({ setKey, backHref }: Props) {
           [si]: { ...(prev.pageMeta[si] || {}), oilType: value },
         },
       }
+      if (groupByName) next = propagateAllGroupColMaps(next)
+      return next
     })
   }
 
@@ -670,7 +766,9 @@ export function Form0701ReviewApp({ setKey, backHref }: Props) {
       for (const si of indices) {
         pageMeta[si] = { ...(pageMeta[si] || {}), oilType: value }
       }
-      return { ...prev, cur, pageMeta }
+      let next: FileState = { ...prev, cur, pageMeta }
+      if (groupByName) next = propagateAllGroupColMaps(next)
+      return next
     })
   }
 
@@ -894,7 +992,23 @@ export function Form0701ReviewApp({ setKey, backHref }: Props) {
           )
         }
         void applied
-        return { ...prev, cur, colMap, prodName, headerClean, pageMeta, displayOrder }
+        let next: FileState = {
+          ...prev,
+          cur,
+          colMap,
+          prodName,
+          headerClean,
+          pageMeta,
+          displayOrder,
+        }
+        if (groupByName) {
+          const indices = findGroupIndicesForPage(next, si, true)
+          if (indices && indices[0] === si) {
+            const patched = propagateColMapFromFirst(next, indices)
+            if (patched) next = patched
+          }
+        }
+        return next
       })
       setExtraCanonTick((t) => t + 1)
       showStatus("ok", `AI แมพแล้ว — กรุณาตรวจสอบ`)
@@ -1301,7 +1415,13 @@ export function Form0701ReviewApp({ setKey, backHref }: Props) {
             <input
               type="checkbox"
               checked={groupByName}
-              onChange={(e) => setGroupByName(e.target.checked)}
+              onChange={(e) => {
+                const on = e.target.checked
+                setGroupByName(on)
+                if (on) {
+                  setState((prev) => propagateAllGroupColMaps(prev))
+                }
+              }}
             />
             จัดกลุ่มตามชื่อ
           </label>
@@ -1452,6 +1572,14 @@ export function Form0701ReviewApp({ setKey, backHref }: Props) {
                           <span className="text-[11px] text-slate-500">
                             {sec.rows.length} แถว
                           </span>
+                          {state.rawDocs[si]?.id ? (
+                            <span
+                              className="font-mono text-[11px] text-slate-500"
+                              title="document id"
+                            >
+                              · {String(state.rawDocs[si].id)}
+                            </span>
+                          ) : null}
                         </div>
                         {!hideOilMeta ? (
                           <div className="flex flex-wrap items-end gap-3 border-b border-teal-900/60 bg-gradient-to-r from-teal-950/40 to-slate-950/80 px-3 py-3">
@@ -1484,16 +1612,16 @@ export function Form0701ReviewApp({ setKey, backHref }: Props) {
                             </p>
                           </div>
                         ) : null}
-                        <div className="flex flex-wrap gap-2 border-b border-slate-800 bg-slate-950/50 px-3 py-2">
+                        <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 bg-slate-950/50 px-3 py-2">
                           <Button
                             type="button"
                             size="sm"
                             variant="outline"
                             disabled={busy}
                             onClick={() => void handleAiMap(si)}
-                            className="h-7 border-violet-500/50 bg-violet-500/10 text-violet-100"
+                            className="h-7 gap-1.5 border-violet-500/50 bg-violet-500/10 text-violet-100 hover:bg-violet-500/20 hover:text-violet-50"
                           >
-                            <Sparkles className="size-3.5" />
+                            <Sparkles className="size-3.5 shrink-0" />
                             AI แมพ
                           </Button>
                           <Button
@@ -1501,11 +1629,38 @@ export function Form0701ReviewApp({ setKey, backHref }: Props) {
                             size="sm"
                             variant="outline"
                             disabled={busy || !state.rawDocs[si]?.blobFileName}
-                            onClick={() => void handleReocr(si)}
-                            className="h-7 border-slate-600"
+                            title={
+                              state.rawDocs[si]?.blobFileName
+                                ? "รัน OCR หน้านี้ใหม่จากไฟล์ต้นฉบับ (จะแทนที่ตารางหน้านี้)"
+                                : "ไม่มีไฟล์ต้นฉบับสำหรับหน้านี้"
+                            }
+                            onClick={() => {
+                              void (async () => {
+                                if (
+                                  !(await swalConfirm(
+                                    "รัน OCR หน้านี้ใหม่? ตารางและการแก้ในหน้านี้จะถูกแทนที่",
+                                    {
+                                      title: "รัน OCR ใหม่",
+                                      confirmText: "รันใหม่",
+                                      cancelText: "ยกเลิก",
+                                      destructive: true,
+                                    }
+                                  ))
+                                ) {
+                                  return
+                                }
+                                await handleReocr(si)
+                              })()
+                            }}
+                            className="h-7 gap-1.5 border-amber-500/45 bg-amber-500/10 text-amber-100 hover:border-amber-400/70 hover:bg-amber-500/20 hover:text-amber-50 disabled:border-slate-700 disabled:bg-transparent disabled:text-slate-600"
                           >
-                            <RefreshCw className="size-3.5" />
-                            Re-OCR
+                            <RefreshCw
+                              className={cn(
+                                "size-3.5 shrink-0",
+                                busy && "animate-spin"
+                              )}
+                            />
+                            รัน OCR ใหม่
                           </Button>
                         </div>
                         <SectionTable
