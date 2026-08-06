@@ -72,6 +72,8 @@ async function checkBlob(): Promise<CheckResult> {
 async function checkLocalCache(): Promise<CheckResult> {
   const start = Date.now()
   try {
+    const { pingMongo, getMongoDbName } = await import("@/lib/providers/mongodb")
+    const ping = await pingMongo()
     const { getCacheStatus } = await import("@/lib/local-cache")
     const status = await getCacheStatus()
     return {
@@ -79,8 +81,11 @@ async function checkLocalCache(): Promise<CheckResult> {
       ok: true,
       latencyMs: Date.now() - start,
       details: {
+        provider: "mongodb",
+        db: ping.db || getMongoDbName(),
         downloadCount: status.downloadCount,
         prepareCount: status.prepareCount,
+        blobCount: status.blobCount,
       },
     }
   } catch (error) {

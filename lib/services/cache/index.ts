@@ -1,7 +1,3 @@
-/**
- * Backward-compatible entry point for cache APIs.
- * Implementation lives in `lib/services/cache` (MongoDB provider).
- */
 export type {
   BlobCacheNameParts,
   CacheKind,
@@ -9,7 +5,7 @@ export type {
   CachedBlobListItem,
   ManifestEntry,
   ManifestFile,
-} from "@/lib/services/cache"
+} from "./types"
 
 export {
   blobCacheMonthYearKey,
@@ -33,4 +29,4 @@ export {
   saveBlobFile,
   saveDownloadedDocument,
   savePrepareResult,
-} from "@/lib/services/cache"
+} from "./service"
