@@ -176,6 +176,9 @@ async function buildUploadHistory(filters?: UploadHistoryFilters): Promise<{
     }))
 
   const timestamps = makeCacheTimestamps("upload-history")
+  if (!timestamps.expiresAt) {
+    throw new Error("upload-history cache requires TTL expiresAt")
+  }
   const payloadToSave: UploadHistoryPayload = {
     version: UPLOAD_HISTORY_VERSION,
     savedAt: timestamps.savedAt,
