@@ -9,6 +9,7 @@ import {
   FileJson,
   RotateCcw,
   RefreshCw,
+  Pencil,
 } from "lucide-react"
 
 import toast from "react-hot-toast"
@@ -79,6 +80,84 @@ function formatPageLabel(sec: Section, si: number): string {
   const num = numMatch ? numMatch[1] : String(si + 1)
   const suffix = pageStr.match(/\s*(\([^)]+\))\s*$/)
   return suffix ? `หน้าที่ ${num} ${suffix[1]}` : `หน้าที่ ${num}`
+}
+
+function oilTypeOf(state: FileState, si: number): string {
+  return (state.pageMeta[si]?.oilType ?? state.cur[si]?.oilType ?? "").trim()
+}
+
+type OilDisplayGroup = {
+  key: string
+  label: string
+  indices: number[]
+}
+
+/** Consecutive sections with the same oil_type → one display group. */
+function buildOilDisplayGroups(
+  state: FileState,
+  groupByName: boolean
+): OilDisplayGroup[] {
+  if (!groupByName) {
+    return state.cur.map((sec, si) => ({
+      key: `page-${si}`,
+      label: formatPageLabel(sec, si),
+      indices: [si],
+    }))
+  }
+  const groups: OilDisplayGroup[] = []
+  for (let si = 0; si < state.cur.length; si++) {
+    const label = oilTypeOf(state, si) || "(ไม่ระบุวัตถุดิบ)"
+    const key = label.toLowerCase()
+    const last = groups[groups.length - 1]
+    if (last && last.key === key) {
+      last.indices.push(si)
+    } else {
+      groups.push({ key, label, indices: [si] })
+    }
+  }
+  return groups
+}
+
+function formatGroupNavLabel(state: FileState, g: OilDisplayGroup): string {
+  if (g.indices.length === 1) {
+    const si = g.indices[0]
+    return `${g.label} · ${formatPageLabel(state.cur[si], si)}`
+  }
+  const first = formatPageLabel(state.cur[g.indices[0]], g.indices[0])
+  const last = formatPageLabel(
+    state.cur[g.indices[g.indices.length - 1]],
+    g.indices[g.indices.length - 1]
+  )
+  return `${g.label} · ${first}–${last.replace(/^หน้าที่\s*/, "")}`
+}
+
+/** DOM id / hash fragment for a display group. */
+function hashIdForGroup(
+  g: OilDisplayGroup,
+  gi: number,
+  groupByName: boolean
+): string {
+  if (groupByName && g.indices.length > 1) return `grp-${gi}`
+  return `sec-${g.indices[0]}`
+}
+
+function pushUrlHash(id: string, mode: "push" | "replace" = "push") {
+  if (typeof window === "undefined") return
+  const next = `#${id}`
+  if (window.location.hash === next) return
+  const url = `${window.location.pathname}${window.location.search}${next}`
+  if (mode === "replace") {
+    window.history.replaceState(null, "", url)
+  } else {
+    window.history.pushState(null, "", url)
+  }
+}
+
+function parseHashTarget(): { kind: "grp" | "sec"; n: number } | null {
+  if (typeof window === "undefined") return null
+  const m = window.location.hash.match(/^#(grp|sec)-(\d+)$/)
+  if (!m) return null
+  return { kind: m[1] as "grp" | "sec", n: Number(m[2]) }
 }
 
 /** Visible column indices in display order for a section. */
@@ -161,6 +240,8 @@ export function Form0701ReviewApp({ setKey, backHref }: Props) {
   const [activeSi, setActiveSi] = useState(0)
   const [showGrid, setShowGrid] = useState(true)
   const [fullNames, setFullNames] = useState(false)
+  /** Group consecutive pages that share the same oil_type name. */
+  const [groupByName, setGroupByName] = useState(false)
   const [tableSearch, setTableSearch] = useState("")
   const [busy, setBusy] = useState(false)
   const [picker, setPicker] = useState<{
@@ -172,8 +253,133 @@ export function Form0701ReviewApp({ setKey, backHref }: Props) {
   const [extraCanonTick, setExtraCanonTick] = useState(0)
   const pdfBytesRef = useRef<ArrayBuffer | null>(null)
   const pdfUrlRef = useRef<string | null>(null)
+  const reviewScrollRef = useRef<HTMLElement | null>(null)
+  /** Skip scroll-spy hash writes while programmatically scrolling from a click/hash. */
+  const hashNavLockRef = useRef(false)
 
   const editCount = useMemo(() => countEdits(state), [state])
+
+  const displayGroups = useMemo(
+    () => buildOilDisplayGroups(state, groupByName),
+    // Only re-group when pages / oil names / toggle change — not on every cell edit
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [state.cur, state.pageMeta, groupByName]
+  )
+
+  const navigateToHashTarget = useCallback(
+    (opts?: { smooth?: boolean; push?: boolean }) => {
+      const target = parseHashTarget()
+      if (!target || !state.cur.length) return false
+      let el: HTMLElement | null = null
+      let si = 0
+      if (target.kind === "grp") {
+        el = document.getElementById(`grp-${target.n}`)
+        const g = displayGroups[target.n]
+        if (g) si = g.indices[0]
+      } else {
+        el = document.getElementById(`sec-${target.n}`)
+        si = target.n
+      }
+      if (!el) return false
+      hashNavLockRef.current = true
+      setActiveSi(si)
+      el.scrollIntoView({
+        behavior: opts?.smooth === false ? "auto" : "smooth",
+        block: "start",
+      })
+      if (opts?.push) pushUrlHash(el.id, "push")
+      window.setTimeout(() => {
+        hashNavLockRef.current = false
+      }, 600)
+      return true
+    },
+    [state.cur.length, displayGroups]
+  )
+
+  const goToGroup = useCallback(
+    (g: OilDisplayGroup, gi: number) => {
+      const id = hashIdForGroup(g, gi, groupByName)
+      hashNavLockRef.current = true
+      setActiveSi(g.indices[0])
+      pushUrlHash(id, "push")
+      document.getElementById(id)?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      })
+      window.setTimeout(() => {
+        hashNavLockRef.current = false
+      }, 600)
+    },
+    [groupByName]
+  )
+
+  // Scroll-spy: update active tab + hash while scrolling the review pane
+  useEffect(() => {
+    if (!state.cur.length) return
+    const root = reviewScrollRef.current
+    const ids = displayGroups.map((g, gi) =>
+      hashIdForGroup(g, gi, groupByName)
+    )
+    const elements = ids
+      .map((id) => document.getElementById(id))
+      .filter((el): el is HTMLElement => !!el)
+    if (!elements.length) return
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (hashNavLockRef.current) return
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort(
+            (a, b) =>
+              (a.boundingClientRect.top || 0) - (b.boundingClientRect.top || 0)
+          )
+        const top = visible[0]
+        if (!top?.target?.id) return
+        const id = top.target.id
+        const grpMatch = id.match(/^grp-(\d+)$/)
+        const secMatch = id.match(/^sec-(\d+)$/)
+        let nextSi: number | null = null
+        if (grpMatch) {
+          const g = displayGroups[Number(grpMatch[1])]
+          if (g) nextSi = g.indices[0]
+        } else if (secMatch) {
+          nextSi = Number(secMatch[1])
+        }
+        if (nextSi != null) {
+          setActiveSi((prev) => (prev === nextSi ? prev : nextSi))
+        }
+        pushUrlHash(id, "replace")
+      },
+      {
+        root: root ?? null,
+        rootMargin: "-12% 0px -70% 0px",
+        threshold: [0, 0.25],
+      }
+    )
+    for (const el of elements) observer.observe(el)
+    return () => observer.disconnect()
+  }, [state.cur.length, displayGroups, groupByName])
+
+  // Apply hash on load / when sections appear / when hash changes (back/forward)
+  useEffect(() => {
+    if (!state.cur.length) return
+    const apply = () => {
+      navigateToHashTarget({ smooth: false })
+    }
+    // Defer until DOM ids exist
+    const t = window.setTimeout(apply, 50)
+    const onHash = () => {
+      navigateToHashTarget({ smooth: true })
+    }
+    window.addEventListener("hashchange", onHash)
+    window.addEventListener("popstate", onHash)
+    return () => {
+      window.clearTimeout(t)
+      window.removeEventListener("hashchange", onHash)
+      window.removeEventListener("popstate", onHash)
+    }
+  }, [state.cur.length, groupByName, navigateToHashTarget])
 
   const showStatus = useCallback((kind: StatusKind, text: string) => {
     if (kind === "idle") {
@@ -451,6 +657,20 @@ export function Form0701ReviewApp({ setKey, backHref }: Props) {
           [si]: { ...(prev.pageMeta[si] || {}), oilType: value },
         },
       }
+    })
+  }
+
+  /** When grouped, editing oil_type applies to every page in the run. */
+  const updateOilTypeGroup = (indices: number[], value: string) => {
+    setState((prev) => {
+      const cur = prev.cur.map((s, i) =>
+        indices.includes(i) ? { ...s, oilType: value } : s
+      )
+      const pageMeta = { ...prev.pageMeta }
+      for (const si of indices) {
+        pageMeta[si] = { ...(pageMeta[si] || {}), oilType: value }
+      }
+      return { ...prev, cur, pageMeta }
     })
   }
 
@@ -1077,6 +1297,14 @@ export function Form0701ReviewApp({ setKey, backHref }: Props) {
             />
             ชื่อเต็ม
           </label>
+          <label className="flex items-center gap-1" title="รวมหน้าต่อเนื่องที่วัตถุดิบชื่อเดียวกัน">
+            <input
+              type="checkbox"
+              checked={groupByName}
+              onChange={(e) => setGroupByName(e.target.checked)}
+            />
+            จัดกลุ่มตามชื่อ
+          </label>
           <input
             type="search"
             placeholder="ค้นหาในตาราง..."
@@ -1155,7 +1383,7 @@ export function Form0701ReviewApp({ setKey, backHref }: Props) {
           )}
         </section>
 
-        <section className="min-h-0 overflow-auto">
+        <section ref={reviewScrollRef} className="min-h-0 overflow-auto">
           {!state.cur.length ? (
             <div className="rounded-xl border border-slate-800 bg-slate-900 p-10 text-center text-sm text-slate-500">
               {setKey
@@ -1167,26 +1395,26 @@ export function Form0701ReviewApp({ setKey, backHref }: Props) {
           ) : (
             <>
               <div className="sticky top-0 z-10 mb-2 flex flex-wrap gap-1.5 border-b border-slate-800 bg-slate-950 py-2">
-                {state.cur.map((sec, si) => (
-                  <button
-                    key={si}
-                    type="button"
-                    onClick={() => {
-                      setActiveSi(si)
-                      document
-                        .getElementById(`sec-${si}`)
-                        ?.scrollIntoView({ behavior: "smooth", block: "start" })
-                    }}
-                    className={cn(
-                      "rounded-full border px-3 py-1 text-xs",
-                      activeSi === si
-                        ? "border-cyan-400 bg-cyan-500 text-slate-950"
-                        : "border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800"
-                    )}
-                  >
-                    {formatPageLabel(sec, si)}
-                  </button>
-                ))}
+                {displayGroups.map((g, gi) => {
+                  const active = g.indices.includes(activeSi)
+                  return (
+                    <button
+                      key={g.key + gi}
+                      type="button"
+                      onClick={() => goToGroup(g, gi)}
+                      className={cn(
+                        "rounded-full border px-3 py-1 text-xs",
+                        active
+                          ? "border-cyan-400 bg-cyan-500 text-slate-950"
+                          : "border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800"
+                      )}
+                    >
+                      {groupByName
+                        ? formatGroupNavLabel(state, g)
+                        : formatPageLabel(state.cur[g.indices[0]], g.indices[0])}
+                    </button>
+                  )
+                })}
               </div>
               <div className="mb-2 flex flex-wrap gap-3 text-xs text-slate-500">
                 <span>
@@ -1203,84 +1431,168 @@ export function Form0701ReviewApp({ setKey, backHref }: Props) {
                 </span>
               </div>
               <div className="space-y-6">
-                {state.cur.map((sec, si) => (
-                  <div
-                    key={si}
-                    id={`sec-${si}`}
-                    className="overflow-hidden rounded-xl border-2 border-slate-700 bg-slate-900 shadow-lg"
-                  >
-                    <div className="flex flex-wrap items-center gap-2 border-b border-slate-700 bg-slate-800/80 px-3 py-2">
-                      <h2 className="text-sm font-semibold text-slate-100">
-                        {formatPageLabel(sec, si)}
-                      </h2>
-                      <span className="text-[11px] text-slate-500">
-                        {sec.rows.length} แถว
-                      </span>
-                    </div>
-                    <div className="flex flex-wrap items-end gap-3 border-b border-teal-900/60 bg-gradient-to-r from-teal-950/40 to-slate-950/80 px-3 py-3">
-                      <div className="min-w-[220px] flex-1">
-                        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-teal-400/90">
-                          วัตถุดิบที่ออกรายงาน (oil_type)
-                        </label>
-                        <input
-                          className="w-full max-w-md rounded-md border border-teal-800/60 bg-slate-950 px-3 py-1.5 text-sm font-semibold text-teal-100 outline-none placeholder:text-slate-600 focus:border-teal-400"
-                          placeholder="เช่น น้ำมันดิบ / Condensate"
-                          value={
-                            state.pageMeta[si]?.oilType ?? sec.oilType ?? ""
+                {displayGroups.map((g, gi) => {
+                  const renderPageBlock = (si: number, hideOilMeta: boolean) => {
+                    const sec = state.cur[si]
+                    if (!sec) return null
+                    return (
+                      <div
+                        key={si}
+                        id={`sec-${si}`}
+                        className={cn(
+                          hideOilMeta
+                            ? "border-t border-slate-800"
+                            : "overflow-hidden rounded-xl border-2 border-slate-700 bg-slate-900 shadow-lg"
+                        )}
+                      >
+                        <div className="flex flex-wrap items-center gap-2 border-b border-slate-700 bg-slate-800/80 px-3 py-2">
+                          <h2 className="text-sm font-semibold text-slate-100">
+                            {formatPageLabel(sec, si)}
+                          </h2>
+                          <span className="text-[11px] text-slate-500">
+                            {sec.rows.length} แถว
+                          </span>
+                        </div>
+                        {!hideOilMeta ? (
+                          <div className="flex flex-wrap items-end gap-3 border-b border-teal-900/60 bg-gradient-to-r from-teal-950/40 to-slate-950/80 px-3 py-3">
+                            <div className="min-w-[220px] flex-1">
+                              <label className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-teal-400/90">
+                                <Pencil className="size-3 shrink-0" aria-hidden />
+                                วัตถุดิบที่ออกรายงาน (oil_type)
+                              </label>
+                              <div className="relative max-w-md">
+                                <Pencil
+                                  className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-teal-500/80"
+                                  aria-hidden
+                                />
+                                <input
+                                  className="w-full rounded-md border border-teal-800/60 bg-slate-950 py-1.5 pr-3 pl-8 text-sm font-semibold text-teal-100 outline-none placeholder:text-slate-600 focus:border-teal-400"
+                                  placeholder="เช่น น้ำมันดิบ / Condensate"
+                                  value={
+                                    state.pageMeta[si]?.oilType ??
+                                    sec.oilType ??
+                                    ""
+                                  }
+                                  onChange={(e) =>
+                                    updateOilType(si, e.target.value)
+                                  }
+                                />
+                              </div>
+                            </div>
+                            <p className="pb-1 text-[11px] text-slate-500">
+                              อยู่นอกตาราง — ไม่ใช่ชื่อคอลัมน์ผลิตภัณฑ์
+                            </p>
+                          </div>
+                        ) : null}
+                        <div className="flex flex-wrap gap-2 border-b border-slate-800 bg-slate-950/50 px-3 py-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={busy}
+                            onClick={() => void handleAiMap(si)}
+                            className="h-7 border-violet-500/50 bg-violet-500/10 text-violet-100"
+                          >
+                            <Sparkles className="size-3.5" />
+                            AI แมพ
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={busy || !state.rawDocs[si]?.blobFileName}
+                            onClick={() => void handleReocr(si)}
+                            className="h-7 border-slate-600"
+                          >
+                            <RefreshCw className="size-3.5" />
+                            Re-OCR
+                          </Button>
+                        </div>
+                        <SectionTable
+                          si={si}
+                          section={sec}
+                          colMap={state.colMap[si] || []}
+                          displayOrder={state.displayOrder[si]}
+                          edits={state.edits[si] || {}}
+                          deletedRows={state.deletedRows}
+                          deletedCols={state.deletedCols}
+                          prodName={state.prodName[si] || {}}
+                          headerClean={state.headerClean[si] || {}}
+                          tableSearch={tableSearch}
+                          groupedHeader={formKeyOf(sec.formType) === "07_01"}
+                          onOpenCanon={(ci, x, y) =>
+                            setPicker({ si, ci, x, y })
                           }
-                          onChange={(e) => updateOilType(si, e.target.value)}
+                          onCellChange={(ri, ci, v) =>
+                            updateCell(si, ri, ci, v)
+                          }
+                          onProdNameChange={(ci, v) =>
+                            updateProdName(si, ci, v)
+                          }
+                          onDeleteCol={(ci) => deleteCol(si, ci)}
+                          onDeleteRow={(ri) => deleteRow(si, ri)}
+                          onInsertCol={(ci) => insertCol(si, ci)}
+                          onInsertRow={(ri) => insertRow(si, ri)}
                         />
                       </div>
-                      <p className="pb-1 text-[11px] text-slate-500">
-                        อยู่นอกตาราง — ไม่ใช่ชื่อคอลัมน์ผลิตภัณฑ์
-                      </p>
+                    )
+                  }
+
+                  if (!groupByName || g.indices.length === 1) {
+                    return renderPageBlock(g.indices[0], false)
+                  }
+
+                  const oilValue =
+                    state.pageMeta[g.indices[0]]?.oilType ??
+                    state.cur[g.indices[0]]?.oilType ??
+                    ""
+
+                  return (
+                    <div
+                      key={g.key + gi}
+                      id={`grp-${gi}`}
+                      className="overflow-hidden rounded-xl border-2 border-teal-800/70 bg-slate-900 shadow-lg"
+                    >
+                      <div className="border-b border-teal-900/60 bg-gradient-to-r from-teal-950/50 to-slate-950 px-3 py-3">
+                        <div className="mb-2 flex flex-wrap items-center gap-2">
+                          <h2 className="flex items-center gap-1.5 text-sm font-semibold text-teal-100">
+                            <Pencil
+                              className="size-3.5 shrink-0 text-teal-400"
+                              aria-hidden
+                            />
+                            {g.label}
+                          </h2>
+                          <span className="rounded-full border border-teal-800/60 px-2 py-0.5 text-[10px] text-teal-300/90">
+                            {g.indices.length} ใบต่อเนื่อง
+                          </span>
+                        </div>
+                        <div className="min-w-[220px] max-w-md">
+                          <label className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-teal-400/90">
+                            <Pencil className="size-3 shrink-0" aria-hidden />
+                            วัตถุดิบที่ออกรายงาน (oil_type) — ใช้ร่วมทั้งกลุ่ม
+                          </label>
+                          <div className="relative">
+                            <Pencil
+                              className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-teal-500/80"
+                              aria-hidden
+                            />
+                            <input
+                              className="w-full rounded-md border border-teal-800/60 bg-slate-950 py-1.5 pr-3 pl-8 text-sm font-semibold text-teal-100 outline-none placeholder:text-slate-600 focus:border-teal-400"
+                              placeholder="เช่น น้ำมันดิบ / Condensate"
+                              value={oilValue}
+                              onChange={(e) =>
+                                updateOilTypeGroup(g.indices, e.target.value)
+                              }
+                            />
+                          </div>
+                        </div>
+                      </div>
+                      <div className="divide-y divide-slate-800">
+                        {g.indices.map((si) => renderPageBlock(si, true))}
+                      </div>
                     </div>
-                    <div className="flex flex-wrap gap-2 border-b border-slate-800 bg-slate-950/50 px-3 py-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        disabled={busy}
-                        onClick={() => void handleAiMap(si)}
-                        className="h-7 border-violet-500/50 bg-violet-500/10 text-violet-100"
-                      >
-                        <Sparkles className="size-3.5" />
-                        AI แมพ
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        disabled={busy || !state.rawDocs[si]?.blobFileName}
-                        onClick={() => void handleReocr(si)}
-                        className="h-7 border-slate-600"
-                      >
-                        <RefreshCw className="size-3.5" />
-                        Re-OCR
-                      </Button>
-                    </div>
-                    <SectionTable
-                      si={si}
-                      section={sec}
-                      colMap={state.colMap[si] || []}
-                      displayOrder={state.displayOrder[si]}
-                      edits={state.edits[si] || {}}
-                      deletedRows={state.deletedRows}
-                      deletedCols={state.deletedCols}
-                      prodName={state.prodName[si] || {}}
-                      headerClean={state.headerClean[si] || {}}
-                      tableSearch={tableSearch}
-                      groupedHeader={formKeyOf(sec.formType) === "07_01"}
-                      onOpenCanon={(ci, x, y) => setPicker({ si, ci, x, y })}
-                      onCellChange={(ri, ci, v) => updateCell(si, ri, ci, v)}
-                      onProdNameChange={(ci, v) => updateProdName(si, ci, v)}
-                      onDeleteCol={(ci) => deleteCol(si, ci)}
-                      onDeleteRow={(ri) => deleteRow(si, ri)}
-                      onInsertCol={(ci) => insertCol(si, ci)}
-                      onInsertRow={(ri) => insertRow(si, ri)}
-                    />
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </>
           )}

@@ -1,6 +1,13 @@
 "use client"
 
-import { useMemo, type ReactNode } from "react"
+import {
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react"
 import { BetweenVerticalStart, Plus, Trash2 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
@@ -86,7 +93,88 @@ function IconAction({
   )
 }
 
-export function SectionTable({
+/**
+ * Uncontrolled while focused — avoids React rewriting textContent on parent re-renders (lag/cursor jump).
+ */
+const EditableCell = memo(function EditableCell({
+  value,
+  edited,
+  numeric,
+  onCommit,
+}: {
+  value: string
+  edited: boolean
+  numeric: boolean
+  onCommit: (next: string) => void
+}) {
+  const ref = useRef<HTMLTableCellElement>(null)
+  const focusedRef = useRef(false)
+  const valueRef = useRef(value)
+  valueRef.current = value
+
+  useEffect(() => {
+    if (focusedRef.current) return
+    const el = ref.current
+    if (!el) return
+    if (el.textContent !== value) el.textContent = value
+  }, [value])
+
+  return (
+    <td
+      ref={ref}
+      contentEditable
+      suppressContentEditableWarning
+      className={cn(
+        "whitespace-nowrap border-b border-r border-slate-800 px-1.5 py-1 outline-none focus:bg-slate-900 focus:ring-2 focus:ring-cyan-500/50",
+        numeric && "text-right font-mono tabular-nums",
+        edited && "bg-emerald-950/50 shadow-[inset_0_0_0_1px_#22c55e]"
+      )}
+      onFocus={() => {
+        focusedRef.current = true
+      }}
+      onBlur={(e) => {
+        focusedRef.current = false
+        const next = e.currentTarget.textContent ?? ""
+        if (next !== valueRef.current) onCommit(next)
+      }}
+    />
+  )
+})
+
+/** Local draft while typing — commit to parent on blur. */
+const ProdNameInput = memo(function ProdNameInput({
+  value,
+  onCommit,
+}: {
+  value: string
+  onCommit: (next: string) => void
+}) {
+  const [draft, setDraft] = useState(value)
+  const focusedRef = useRef(false)
+
+  useEffect(() => {
+    if (!focusedRef.current) setDraft(value)
+  }, [value])
+
+  return (
+    <input
+      className="mb-1 block w-full max-w-[160px] rounded border border-slate-600 bg-cyan-950/40 px-1.5 py-1 text-[11px] font-semibold text-cyan-100 outline-none focus:border-cyan-400"
+      placeholder="ชื่อสินค้าใต้หัวผลิตภัณฑ์"
+      title="ชื่อผลิตภัณฑ์ในคอลัมน์นี้"
+      value={draft}
+      onFocus={() => {
+        focusedRef.current = true
+      }}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        focusedRef.current = false
+        if (draft !== value) onCommit(draft)
+      }}
+    />
+  )
+})
+
+export const SectionTable = memo(function SectionTable({
   si,
   section,
   colMap,
@@ -112,7 +200,6 @@ export function SectionTable({
       displayOrder && displayOrder.length
         ? displayOrder.filter((ci) => ci >= 0 && ci < n)
         : section.headers.map((_, ci) => ci)
-    // Include any missing indices (e.g. newly inserted) at end
     const seen = new Set(base)
     const ordered = [...base]
     for (let ci = 0; ci < n; ci++) {
@@ -188,12 +275,9 @@ export function SectionTable({
             <div className="mb-0.5 mt-1 text-[10px] font-medium text-cyan-500/90">
               ชื่อผลิตภัณฑ์
             </div>
-            <input
-              className="mb-1 block w-full max-w-[160px] rounded border border-slate-600 bg-cyan-950/40 px-1.5 py-1 text-[11px] font-semibold text-cyan-100 outline-none focus:border-cyan-400"
-              placeholder="ชื่อสินค้าใต้หัวผลิตภัณฑ์"
-              title="ชื่อผลิตภัณฑ์ในคอลัมน์นี้"
+            <ProdNameInput
               value={prodName[ci] || ""}
-              onChange={(e) => onProdNameChange(ci, e.target.value)}
+              onCommit={(next) => onProdNameChange(ci, next)}
             />
             <div
               className="ohdr max-w-[160px] overflow-hidden text-ellipsis text-[11px] font-normal text-slate-500"
@@ -319,24 +403,24 @@ export function SectionTable({
                     const val = cells[idx]
                     const edited = edits[ri]?.[ci] != null
                     return (
-                      <td
+                      <EditableCell
                         key={ci}
-                        contentEditable
-                        suppressContentEditableWarning
-                        className={cn(
-                          "whitespace-nowrap border-b border-r border-slate-800 px-1.5 py-1 outline-none focus:bg-slate-900 focus:ring-2 focus:ring-cyan-500/50",
-                          isNum(val) && "text-right font-mono tabular-nums",
-                          edited &&
-                            "bg-emerald-950/50 shadow-[inset_0_0_0_1px_#22c55e]"
-                        )}
-                        onBlur={(e) => {
-                          const next = e.currentTarget.textContent ?? ""
+                        value={val}
+                        edited={edited}
+                        numeric={isNum(val)}
+                        onCommit={(next) => {
                           const orig = row.cells[ci] ?? ""
-                          if (next !== orig) onCellChange(ri, ci, next)
+                          const prevEdit = edits[ri]?.[ci]
+                          if (next === orig) {
+                            // restored to OCR value — clear edit marker via writing same as orig only if was edited
+                            if (prevEdit != null && prevEdit !== orig) {
+                              onCellChange(ri, ci, next)
+                            }
+                            return
+                          }
+                          if (next !== prevEdit) onCellChange(ri, ci, next)
                         }}
-                      >
-                        {val}
-                      </td>
+                      />
                     )
                   })}
                 </tr>
@@ -368,4 +452,4 @@ export function SectionTable({
       </div>
     </TooltipProvider>
   )
-}
+})
